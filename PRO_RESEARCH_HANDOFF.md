@@ -1,13 +1,193 @@
-# Request For GPT-5.5 Pro: One-Pass Surprise Consolidation After STAR Falsifier
+# Request For GPT-5.5 Pro: One-Pass Surprise Consolidation After PRISM-Q Falsifier
 
-Date: 2026-05-20
+Date: 2026-05-22
 
-Audience: GPT-5.5 Pro. I am giving you the full research log as a separate attachment. Please read the full log first. This document is the current request and framing after implementing and testing your previous STAR proposal.
+Audience: GPT-5.5 Pro. I am giving you two files:
 
-## 2026-05-21 Update: SEAL-Q Falsifier And New Ask
+1. `RESEARCH_LOG.md`: the full research log, including all implemented attempts,
+   metrics, falsifiers, and harness details.
+2. This file: the current prompt/request. Please read the full research log
+   first, then answer this prompt.
+
+## 2026-05-22 Update: PRISM-Q Falsifier And New Ask
 
 Please treat this update as the current live state. The older material below is
 background and the full research log is attached separately.
+
+Your latest PRISM-Q direction was implemented in a first-pass cheap form and
+tested on the primary two-task + expanded-sentinel benchmark. It did not solve
+the benchmark, and the results are informative.
+
+Implementation added:
+
+- `--intrinsic-target-purifier prism_q`;
+- PRISM same-pass innovation basis;
+- PRISM local option/readout hazard basis;
+- hazard residualization against innovation;
+- generic-key -> hazard singular-mode clipping;
+- signal-retention backoff;
+- `prism_q`, `prism_q_strict`, and `prism_q_fast` benchmark presets.
+
+Important implementation caveat:
+
+This was a cheap approximation to the full PRISM proposal. It used captured
+downstream MLP-output rows and local top-k LM-head contrasts as the propagated
+signal/hazard basis. It did **not** implement exact `J_{l->r}`, exact local
+RMSNorm/logit VJP, or attention V/O transport.
+
+Verification:
+
+```text
+79 passed
+```
+
+including the synthetic PRISM clipping test.
+
+### Primary Two-Task Benchmark Setup
+
+- Qwen/Qwen3-1.7B;
+- two tasks: Lyran then Vomar;
+- 6 lessons/task, 8 examples/lesson;
+- teacher-filtered 8-question eval per task;
+- all 28 layers;
+- `relational_aggregate`, context-value, final-aligned;
+- key feature top-k `16`;
+- target scale `.10`;
+- output/input weak stack `256/10`, `256/20`;
+- expanded sentinel suite;
+- no old-key negatives, no old atoms, no sidecar state.
+
+Baselines:
+
+- Lyran baseline `1/8`, context `8/8`;
+- Vomar baseline `1/8`, context `8/8`.
+
+### PRISM-Q Loose Budget
+
+Flags:
+
+- `--intrinsic-target-purifier prism_q`;
+- `--prism-budget 0.25`;
+- `--prism-correction-cap 0.35`;
+- `--prism-signal-retention-min 0.90`.
+
+Result:
+
+- after task0: Lyran edited `1/8`;
+- after task1: Lyran edited `2/8`, Vomar edited `2/8`;
+- sentinel after task0: `7` correct-to-wrong, before-correct mean drop `6.607`;
+- sentinel after task1: `9` correct-to-wrong, before-correct mean drop `7.712`;
+- PRISM diagnostics: mean correction Frobenius `0.093`, mean hazard ratio
+  `0.635`, signal retention `~1.0`.
+
+Interpretation:
+
+Loose PRISM was mostly inactive. Its spectral budget was often larger than the
+measured hazard, so it left the unsafe direct map effectively unchanged.
+
+### PRISM-Q Strict Budget
+
+Flags:
+
+- `--intrinsic-target-purifier prism_q`;
+- `--prism-budget 0.02`;
+- `--prism-correction-cap 1.00`;
+- `--prism-signal-retention-min 0.85`.
+
+Result:
+
+- after task0: Lyran edited `1/8`;
+- after task1: Lyran edited `1/8`, Vomar edited `1/8`;
+- sentinel after task0: `5` correct-to-wrong, before-correct mean drop `5.862`;
+- sentinel after task1: `7` correct-to-wrong, before-correct mean drop `6.368`;
+- PRISM diagnostics: mean correction Frobenius `0.292`, mean hazard ratio
+  `0.207`, signal retention `~1.0`.
+
+Interpretation:
+
+Strict PRISM did perform the intended hazard clipping, but it still did not
+protect sentinels and it collapsed acquisition to baseline. That falsifies this
+first PRISM approximation as the relevant safety coordinate. Either the real
+downstream hazard is not captured by the cheap MLP-output / top-k-logit basis,
+or the harmful component is not generic-key -> propagated option evidence in
+the form tested here.
+
+### Runtime/Harness Update
+
+The full all-layer two-task benchmark is too slow for first-pass purifier
+debugging. I added:
+
+- `--early-stop-c2w-over`;
+- `--early-stop-task0-min-edited-correct`;
+- `prism_q_fast` preset in `scripts/continual_benchmark_grid.py`.
+
+`prism_q_fast` uses:
+
+- 40 teacher-filter candidates;
+- 4 eval questions;
+- 7 representative layers;
+- early-stop after task0 if sentinel c2w is nonzero or task0 acquisition is
+  below `1/4`.
+
+This is only a diagnostic filter. Final claims still require the full
+all-layer, no-sidecar, two-task + expanded-sentinel benchmark.
+
+### Current Diagnosis
+
+The current best weight-only continual baseline remains Q-RICO/key16-style
+filtering, despite low acquisition. Local output filters, same-pass anchors,
+gauge sealing, anti-erasure, object-span preservation, SPECTRA-style local
+tail/hazard clipping, and first-pass propagated-hazard PRISM have all failed
+or collapsed into safe/inert behavior.
+
+The central failure now looks like:
+
+\[
+\text{the acquisition-bearing component is close to the damaging component,}
+\]
+
+but the damaging component is **not** captured by:
+
+- global output PCs;
+- local top-k LM-head option sketches;
+- same-pass stable-margin anchors;
+- generic-key x local-option leakage;
+- destructive anti-parallel edits to existing down columns;
+- cheap propagated MLP-output hazard bases.
+
+The high-level goal and hard constraints are unchanged:
+
+- one forward pass over the lesson/context;
+- closed-form write;
+- surprise/innovation/free-energy driven;
+- all-layer compatible;
+- no null prompts, quizzes, answer traces, labels, probes, SAE, RAG, router;
+- no sidecar state across sessions after weights are written;
+- primary benchmark is two-task continual learning plus sentinel preservation,
+  not single-task frontier chasing.
+
+Please propose the next implementable mathematical tool. The answer should be
+specific enough to implement: tensors, objectives, closed-form solve, required
+diagnostics, first runs, ablations, and falsification criteria.
+
+In particular, please address:
+
+1. Given PRISM strict clipping reduced the measured hazard ratio but did not
+   reduce real sentinel c2w, what safety coordinate should replace it?
+2. Should we improve acquisition from the safe Q-RICO baseline instead of
+   trying to purify raw relational/high-rank residual maps?
+3. Is the no-sidecar continual-learning constraint forcing an impossibility
+   boundary? If yes, state the minimal additional assumption needed.
+4. If previous writes cannot store old keys/atoms/Fisher/sketches and gauge
+   marks distort future writers, what weight-only mechanism can make writes
+   self-preserving?
+5. What is the fastest diagnostic ladder before promoting a method to the full
+   two-task benchmark?
+
+## 2026-05-21 Update: SEAL-Q Falsifier And New Ask
+
+This older section is retained for continuity. The PRISM-Q section above is the
+current live state.
 
 Your SEAL-Q proposal was implemented and tested. The mechanical symmetry works,
 but the method does not solve the benchmark.
