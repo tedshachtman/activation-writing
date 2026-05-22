@@ -1,0 +1,255 @@
+"""Launch standardized two-task continual-learning benchmarks.
+
+The main research scoreboard is now sequential acquisition/retention plus
+sentinel preservation. This helper builds repeatable commands for
+``scripts/minilang_intrinsic_continual.py`` so candidate purifiers can be
+compared on the same benchmark instead of optimized on one-off single-task
+runs.
+
+By default it prints commands. Use ``--run`` to execute them locally, or
+``--modal`` with ``--run`` to execute each command through
+``scripts/modal_caic_runner.py`` on Modal.
+"""
+
+from __future__ import annotations
+
+import argparse
+from dataclasses import dataclass
+from pathlib import Path
+import shlex
+import subprocess
+import time
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+LAYERS_28 = [str(idx) for idx in range(28)]
+
+
+@dataclass(frozen=True)
+class Preset:
+    name: str
+    args: tuple[str, ...]
+    description: str
+
+
+COMMON_ARGS: tuple[str, ...] = (
+    "--model",
+    "Qwen/Qwen3-1.7B",
+    "--device",
+    "cuda",
+    "--dtype",
+    "float16",
+    "--tasks",
+    "2",
+    "--lessons-per-task",
+    "6",
+    "--lesson-examples",
+    "8",
+    "--eval-questions",
+    "8",
+    "--teacher-filter-eval",
+    "--teacher-filter-candidates",
+    "120",
+    "--layers",
+    *LAYERS_28,
+    "--intrinsic-surprise-target-mode",
+    "relational_aggregate",
+    "--intrinsic-surprise-token-mode",
+    "final_aligned",
+    "--intrinsic-surprise-relation-value-mode",
+    "context",
+    "--intrinsic-surprise-key-feature-top-k",
+    "16",
+    "--intrinsic-surprise-target-scale",
+    "0.10",
+    "--intrinsic-surprise-weight-mode",
+    "exponential",
+    "--intrinsic-surprise-exp-temperature",
+    "2.0",
+    "--intrinsic-surprise-exp-cap",
+    "20",
+    "--intrinsic-surprise-persistence-power",
+    "1.0",
+    "--intrinsic-surprise-output-penalty-rank",
+    "256",
+    "--intrinsic-surprise-output-penalty-weight",
+    "10",
+    "--intrinsic-surprise-input-penalty-features",
+    "256",
+    "--intrinsic-surprise-input-penalty-weight",
+    "20",
+    "--intrinsic-surprise-input-penalty-usage-power",
+    "0.0",
+    "--sentinel-eval",
+    "--sentinel-suite",
+    "expanded",
+)
+
+
+PRESETS: dict[str, Preset] = {
+    "relational_raw": Preset(
+        name="relational_raw",
+        description="Direct relational aggregate context-value write; high-acquisition unsafe control.",
+        args=("--intrinsic-target-purifier", "none"),
+    ),
+    "qrico_key16": Preset(
+        name="qrico_key16",
+        description="Current best safe single-task baseline: Q-RICO residual-filter, key top-k 16.",
+        args=(
+            "--intrinsic-target-purifier",
+            "qrico",
+            "--qrico-deflate-key-rank",
+            "4",
+            "--qrico-deflate-value-rank",
+            "4",
+            "--qrico-solve-mode",
+            "residual_filter",
+            "--qrico-scramble-weight",
+            "0.0",
+            "--qrico-disable-layer-trust",
+        ),
+    ),
+    "spectra_noquotient": Preset(
+        name="spectra_noquotient",
+        description="SPECTRA tail/hazard projection without ORCA quotient; diagnostic for direct-map correction.",
+        args=(
+            "--intrinsic-target-purifier",
+            "spectra",
+            "--spectra-no-orca-quotient",
+            "--spectra-contrast-rank",
+            "128",
+            "--spectra-tail-anchors",
+            "32",
+            "--spectra-hazard-rank",
+            "4",
+            "--spectra-hazard-budget",
+            "0.25",
+        ),
+    ),
+    "ocep_residual": Preset(
+        name="ocep_residual",
+        description="Object-preserving OCEP residual purifier; unsafe single-task control.",
+        args=(
+            "--intrinsic-target-purifier",
+            "ocep_residual",
+            "--ocep-object-rank",
+            "256",
+            "--ocep-generic-rank",
+            "128",
+            "--ocep-option-rank",
+            "64",
+            "--ocep-correction-cap",
+            "0.10",
+        ),
+    ),
+    "ocep_qrico": Preset(
+        name="ocep_qrico",
+        description="Q-RICO then OCEP; safe/inert control on latest single-task split.",
+        args=(
+            "--intrinsic-target-purifier",
+            "ocep_qrico",
+            "--qrico-deflate-key-rank",
+            "4",
+            "--qrico-deflate-value-rank",
+            "4",
+            "--qrico-solve-mode",
+            "residual_filter",
+            "--qrico-scramble-weight",
+            "0.0",
+            "--qrico-disable-layer-trust",
+            "--ocep-object-rank",
+            "256",
+            "--ocep-generic-rank",
+            "128",
+            "--ocep-option-rank",
+            "64",
+            "--ocep-correction-cap",
+            "0.10",
+        ),
+    ),
+    "seal_qrico_no_apply": Preset(
+        name="seal_qrico_no_apply",
+        description="Q-RICO plus signed anti-erasure, but no gauge seal application.",
+        args=(
+            "--intrinsic-target-purifier",
+            "seal_qrico",
+            "--qrico-deflate-key-rank",
+            "4",
+            "--qrico-deflate-value-rank",
+            "4",
+            "--qrico-solve-mode",
+            "residual_filter",
+            "--qrico-scramble-weight",
+            "0.0",
+            "--qrico-disable-layer-trust",
+            "--seal-disable-apply",
+        ),
+    ),
+}
+
+
+def shell_join(parts: list[str]) -> str:
+    return " ".join(shlex.quote(part) for part in parts)
+
+
+def build_command(preset: Preset, output_root: str, run_tag: str) -> list[str]:
+    output = f"{output_root.rstrip('/')}/{run_tag}_{preset.name}"
+    return [
+        "python",
+        "scripts/minilang_intrinsic_continual.py",
+        "--output",
+        output,
+        *COMMON_ARGS,
+        *preset.args,
+    ]
+
+
+def run_command(command: list[str], *, modal: bool) -> None:
+    if modal:
+        wrapped = [
+            "modal",
+            "run",
+            "scripts/modal_caic_runner.py",
+            "--command",
+            shell_join(command),
+        ]
+    else:
+        wrapped = command
+    print(f"\n$ {shell_join(wrapped)}", flush=True)
+    subprocess.run(wrapped, cwd=ROOT, check=True)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--preset",
+        action="append",
+        choices=sorted(PRESETS),
+        help="Preset to include. May be repeated. Defaults to qrico_key16.",
+    )
+    parser.add_argument("--all", action="store_true", help="Include every registered preset.")
+    parser.add_argument("--run", action="store_true", help="Execute commands instead of printing them.")
+    parser.add_argument("--modal", action="store_true", help="Run through Modal. Requires --run.")
+    parser.add_argument("--output-root", default="/modal-runs", help="Output root passed to the benchmark.")
+    parser.add_argument("--tag", default="", help="Run tag. Defaults to current timestamp.")
+    args = parser.parse_args()
+
+    if args.modal and not args.run:
+        parser.error("--modal requires --run")
+
+    names = sorted(PRESETS) if args.all else (args.preset or ["qrico_key16"])
+    tag = args.tag or time.strftime("continual_%Y%m%d_%H%M%S")
+
+    for name in names:
+        preset = PRESETS[name]
+        command = build_command(preset, args.output_root, tag)
+        print(f"\n# {preset.name}: {preset.description}", flush=True)
+        print(shell_join(command), flush=True)
+        if args.run:
+            run_command(command, modal=args.modal)
+
+
+if __name__ == "__main__":
+    main()

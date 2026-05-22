@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "caic"
+version = "0.1.0"
+description = "Causal Activation-Imprint Consolidation experiments for context-to-weight writes."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "accelerate>=0.30",
+  "matplotlib>=3.8",
+  "numpy>=1.26",
+  "pandas>=2.2",
+  "peft>=0.11",
+  "torch>=2.3",
+  "tqdm>=4.66",
+  "transformers>=4.51",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+
+[project.scripts]
+caic-run = "caic.experiment:main"
+caic-baseline = "caic.baseline_runner:main"
+
+[tool.setuptools.packages.find]
+include = ["caic*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

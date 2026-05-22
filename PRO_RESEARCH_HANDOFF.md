@@ -1,0 +1,1905 @@
+# Request For GPT-5.5 Pro: One-Pass Surprise Consolidation After STAR Falsifier
+
+Date: 2026-05-20
+
+Audience: GPT-5.5 Pro. I am giving you the full research log as a separate attachment. Please read the full log first. This document is the current request and framing after implementing and testing your previous STAR proposal.
+
+## 2026-05-21 Update: SEAL-Q Falsifier And New Ask
+
+Please treat this update as the current live state. The older material below is
+background and the full research log is attached separately.
+
+Your SEAL-Q proposal was implemented and tested. The mechanical symmetry works,
+but the method does not solve the benchmark.
+
+Implementation added:
+
+- `--intrinsic-target-purifier seal_qrico`;
+- Q-RICO residual-filter base;
+- signed anti-erasure against current down-value columns;
+- exact SwiGLU up/down gauge seal:
+
+\[
+U_j \leftarrow c_j U_j,\qquad D_j \leftarrow D_j/c_j.
+\]
+
+The repo uses additive memory wrappers for down-projection writes, so the gauge
+seal correctly scales:
+
+- up-projection row;
+- frozen/base down column;
+- additive memory down column;
+- slot memory down columns.
+
+Unit tests pass:
+
+```text
+76 passed
+```
+
+including function-preserving SwiGLU gauge tests, salience detection, signed
+anti-erasure, canonical activation invariance, and SEAL-Q smoke tests.
+
+### Primary Two-Task Benchmark Results
+
+Setup:
+
+- Qwen/Qwen3-1.7B;
+- two tasks: Lyran then Vomar;
+- 6 lessons/task, 8 examples/lesson;
+- teacher-filtered 8-question eval per task;
+- all 28 layers;
+- `relational_aggregate`, context-value, final-aligned;
+- Q-RICO residual-filter base;
+- key feature top-k `16`;
+- scale `.10`;
+- output/input weak stack `256/10`, `256/20`;
+- expanded sentinel suite;
+- no old-key negatives, no old atoms, no sidecar state.
+
+Baselines:
+
+- Lyran baseline `1/8`, context `8/8`;
+- Vomar baseline `1/8`, context `8/8`.
+
+#### Full SEAL-Q
+
+Flags:
+
+- gauge seal applied;
+- canonicalized surprise;
+- `eta_erase=2.0`;
+- `eta_seal=0.05`;
+- max scale `1.10`.
+
+Result:
+
+- step 0 Lyran: `0/8`, sentinel c2w `3`, before-correct drop `1.525`;
+- step 1 Lyran: `1/8`;
+- step 1 Vomar: `1/8`, sentinel c2w `3`, before-correct drop `2.414`.
+
+Diagnostics:
+
+- mean anti-erasure ratio `0.065`;
+- update retention after anti-erasure `0.989`;
+- mean seal scale `1.00022`, max `1.05127`;
+- mean scaled channels/layer update `92.9`.
+
+Interpretation: full SEAL-Q is worse than Q-RICO. It loses acquisition and
+still damages sentinels.
+
+#### Anti-Erasure Only
+
+Flags:
+
+- no gauge seal;
+- no canonical surprise;
+- `eta_erase=2.0`.
+
+Result:
+
+- step 0 Lyran: `2/8`, sentinel c2w `2`, before-correct drop `0.468`;
+- step 1 Lyran: `2/8`;
+- step 1 Vomar: `1/8`, sentinel c2w `2`, before-correct drop `0.893`.
+
+Interpretation: anti-erasure alone is the least bad SEAL-Q variant, but still
+fails: task 1 does not acquire and sentinel c2w is nonzero.
+
+#### Gauge-Only
+
+Flags:
+
+- gauge seal applied;
+- canonicalized surprise;
+- `eta_erase=0.0`.
+
+Result:
+
+- step 0 Lyran: `2/8`, sentinel c2w `3`, before-correct drop `1.533`;
+- step 1 Lyran: `2/8`;
+- step 1 Vomar: `1/8`, sentinel c2w `3`, before-correct drop `2.229`.
+
+Interpretation: the gauge seal/canonicalization path is unsafe even without
+anti-erasure. Since the gauge transform is function-preserving at application
+time, the harm likely comes from how the next write interprets the sealed
+geometry, or from the canonicalized surprise coordinate overselecting
+readout-sensitive channels.
+
+### Updated Diagnosis
+
+SEAL-Q is falsified in its current form.
+
+What survived:
+
+- exact SwiGLU gauge sealing is mechanically valid;
+- salience is visible from weights;
+- signed anti-erasure removes the intended destructive-parallel component;
+- the mechanism obeys the no-sidecar-state rule.
+
+What failed:
+
+- no variant acquired task 1 above baseline;
+- no variant reached zero sentinel c2w;
+- full SEAL-Q erased useful task-0 acquisition;
+- gauge-only worsened sentinel safety;
+- anti-erasure-only improved margin drop but not enough.
+
+The remaining sentinel failure is likely not primarily destructive erasure of
+already load-bearing down columns. It is probably additive false evidence or
+mode/readout injection into generic option directions. Also, up/down gauge
+imbalance may be a bad consolidation mark because it contaminates or distorts
+the writer's future surprise coordinates.
+
+### New Ask
+
+Given the hard no-sidecar-state constraint, what is the next implementable
+mathematical tool?
+
+Please do not propose old-key negatives, old-transform atoms, Fisher/EWC
+state, routers, adapters, or any other persistent state outside weights except
+as diagnostics. The next context gets only updated weights and one new forward
+pass.
+
+We need a method that can improve the two-task benchmark:
+
+\[
+\text{task0 immediate} > \text{base},\quad
+\text{task0 after task1} \ge \text{task0 immediate},\quad
+\text{task1 immediate} > \text{base},\quad
+\text{sentinel c2w}=0.
+\]
+
+Please reason from the new SEAL-Q failure. In particular:
+
+1. If function-preserving gauge imbalance is the wrong weight-only mark, what
+   alternative mark or mechanism could make previous writes self-protecting
+   without changing the model's future surprise coordinate destructively?
+2. If the unsafe component is additive false evidence rather than erasure, what
+   closed-form one-pass metric should identify and remove it while preserving
+   task acquisition?
+3. Is there an identifiability/impossibility result here under the no-sidecar
+   constraint, and if so what extra assumption is minimally necessary?
+4. Should we return to high-rank residual-map purification, but with a
+   weight-only protection rule that does not rely on stored old transforms?
+
+## Short Version
+
+We are trying to build an artificial synaptic consolidation rule for transformers:
+
+> Run one forward pass over a context/lesson/conversation. From that pass plus the current weights, compute a closed-form weight update that internalizes the surprising reusable understanding into the model, without damaging unrelated capabilities.
+
+The current state is no longer vague:
+
+- A one-pass write signal exists.
+- The only current target family that clearly moves behavior toward the full-context teacher is the `relational_aggregate` context-value target.
+- That target is unsafe: it still carries broad readout/posture/mode movement and flips unrelated sentinel items at useful acquisition scale.
+- WICR, CORI, and STAR are safer, but they are behaviorally inert or misoriented.
+- Stronger global output protection reduces margin damage but does not remove the same correct-to-wrong sentinel failure.
+
+The narrowed blocker is:
+
+> We need a one-pass, closed-form, row/component-level purification of the relational/context-value actuator that preserves its context-teacher score-space alignment while removing sentinel-sensitive and generic readout/posture components.
+
+Please do not propose another unrelated key selector unless you can explain why the current evidence implies key selection is still the main blocker. The strongest evidence says target/component purification is the blocker.
+
+## Hard Constraints
+
+Please treat these as hard constraints unless you give a rigorous impossibility argument.
+
+1. **One forward pass at write time**
+
+   At deployment/write time, we get exactly one forward pass through the actual context/lesson/conversation.
+
+   Allowed:
+
+   - current model weights;
+   - activations from this one pass;
+   - deterministic closed-form linear algebra over those weights/activations.
+
+   Not allowed at write time:
+
+   - null/default contrast prompts;
+   - a second pass over "the same prompt without the lesson";
+   - generated quizzes/probes/future questions;
+   - teacher-forced answer traces;
+   - heldout examples;
+   - labels, DSL metadata, or hidden task structure;
+   - next-token loss training/backprop;
+   - empirical calibration passes collected at write time;
+   - sentinel examples as write-time training data;
+   - stored activations, keys, examples, atoms, Fisher/EWC metrics, task
+     summaries, or other sidecar state from previous context sessions.
+
+2. **Closed-form update**
+
+   The write should be a closed-form update, or a small bounded number of closed-form linear algebra operations. No optimizer loop.
+
+3. **Surprise-driven**
+
+   The update should be driven by surprise, prediction error, free energy, innovation, or an equivalent weight-induced mismatch. Raw activation norm is not enough.
+
+4. **No runtime router as the core answer**
+
+   We have tried behavior gates, object gates, density-ratio routers, and related mechanisms. They are useful diagnostics, but the final primitive should not be "store a memory and route to it." The locality should come from the weight update geometry itself.
+
+5. **No RAG or sidecar document memory**
+
+   The update must merge into weights or an always-active global low-rank plastic substrate. It cannot retrieve the original context or examples at inference time.
+
+6. **No persistent per-context or cross-session memory outside weights**
+
+   This is now a hard constraint. After reading a context and writing the
+   weights, the next context/session receives only the updated model weights.
+   It does not receive stored selected keys, old-task negatives, low-rank
+   atoms, old transformation metrics, Fisher/EWC sketches, task IDs, summaries,
+   routers, adapters, or any other sidecar consolidation state from previous
+   sessions.
+
+   Continual learning must therefore be achieved by the weight update itself
+   and by the geometry of future closed-form writes computed from the current
+   weights plus the new single forward pass. A proposal may use old-key or
+   old-transformation storage only as a diagnostic ablation, not as the final
+   method.
+
+7. **No SAE requirement**
+
+   Sparse autoencoders are too expensive for the deployed method. If a feature basis is needed, derive it cheaply from existing weights and the single pass.
+
+8. **All-layer compatibility**
+
+   The rule must be safe to apply across all layers. It may emit near-zero updates in layers where the evidence is weak, but it cannot rely on a hand-picked late layer.
+
+9. **General, not translation-specific**
+
+   The mini-language benchmark is a microscope, not the goal. The same principle should plausibly apply to:
+
+   - user identity learned from conversation;
+   - new object-property facts;
+   - fictional worlds;
+   - scientific mechanisms;
+   - legal/procedural rules;
+   - math notation;
+   - compositional relations.
+
+10. **Continual learning**
+
+   The long-term goal is sequential learning:
+
+   - learn context 1;
+   - learn context 2;
+   - ...
+   - learn context 6;
+   - previous learned contexts should not degrade below their immediate post-write scores;
+   - sentinel/general capabilities should not degrade.
+
+11. **Safety is not only accuracy**
+
+   We track sentinel:
+
+   - correct-to-wrong flips;
+   - wrong-to-correct flips;
+   - preservation rate;
+   - mean margin drift;
+   - before-correct margin drop;
+   - severe margin drop count.
+
+   A method that gains task accuracy but weakens unrelated answers is not acceptable.
+
+## Human/Neuroscience Intuition
+
+The target is not "fine-tune on a lesson." It is closer to predictive-coding-style synaptic consolidation.
+
+The model's weights already encode a world. A context temporarily configures that world into a specific object/relation state. If that state is normal under the model's prior, little should be written. If that state contains a meaningful surprise, the responsible object/relation coordinates should receive a nonlinear write.
+
+Examples:
+
+- In a "purple giraffe" context, "purple" and "giraffe" are not new from scratch. The surprising object is the binding/configuration: giraffe instantiated with purple color.
+- In a conversation with a user, the model should learn facts/preferences/projects about that user from the ordinary working-memory soup, not because a prompt says "now learn user profile."
+- In a mini-language lesson, the model should update lexical mappings, tense, and role-binding relations, not just enter "translation answer mode."
+
+The write should feel like:
+
+> familiar context activity relaxes back to the prior and writes almost nothing; strong semantic mismatch writes a lot into the responsible latent object/relation coordinates.
+
+But the latest experiments add a crucial correction:
+
+> the useful acquisition component is close to readout/value movement, so simply projecting away all output-sensitive directions kills behavior or leaves the same sentinel failure. We need a local decomposition, not a global readout ban.
+
+## Benchmark
+
+The current measurable benchmark is a synthetic mini-language translation task.
+
+The model reads lessons describing an invented language. Then it answers multiple-choice no-context translation questions.
+
+Typical setting:
+
+- model: `Qwen/Qwen3-1.7B`;
+- lessons: 6;
+- examples per lesson: 8;
+- eval: 39-40 heldout multiple-choice translation questions, or a teacher-filtered 20-question subset;
+- baseline no-context: usually `5-6/38-39`, or `0/20` on the teacher-filtered set;
+- full-context teacher: usually `20-21/38-39`, or `20/20` on the teacher-filtered set;
+- expanded sentinel: 25 unrelated MC questions.
+
+The near-term target is not full context-teacher performance. A useful near-term target is around `8-12/20` equivalent partial acquisition, with:
+
+- zero sentinel correct-to-wrong flips;
+- low before-correct margin drop;
+- context-aligned score movement;
+- eventual sequential retention.
+
+## Important Existing Results Before STAR
+
+### Raw activation deltas and TSOC
+
+Raw teacher-student activation deltas are downstream symptoms, not the causal source. They can move internal trajectories toward teacher states, but often write answer/style/prompt residue rather than reusable understanding.
+
+The useful diagnosis was:
+
+> write the missing source/operator, not the downstream activation symptom.
+
+But source extraction alone did not solve behavioral readout or safety.
+
+### Relational aggregate: real acquisition, unsafe
+
+Prior best all-layer acquisition frontier:
+
+- all 28 layers;
+- one lesson forward;
+- `relational_aggregate`;
+- context-value target;
+- target scale `.10`;
+- exponential surprise weighting, temperature `2.0`, cap `20`;
+- persistence power `1`;
+- output/readout penalty rank/weight `256/10`;
+- input penalty features/weight `1024/40`.
+
+Result on teacher-filtered 20-question eval:
+
+- baseline `0/20`;
+- context `20/20`;
+- edited `7/20`;
+- captured context-only opportunities `7/20`;
+- centered score-delta cosine with context teacher `0.589`;
+- projection ratio onto context score movement `0.179`;
+- mean correct-answer score gain on context opportunities `+0.222`;
+- expanded sentinel improves in aggregate, but has `1` correct-to-wrong flip;
+- before-correct sentinel margin drop around `3.847`.
+
+Interpretation:
+
+- This is the only current write family with clear context-teacher alignment.
+- It is not just random mode movement.
+- It is unsafe because the useful target is contaminated.
+
+### Continual learning diagnostic: negative
+
+Two-task all-layer continual diagnostic with the same family of lesson-only surprise writes:
+
+No old-task protection:
+
+- task 0 immediately after task 0: `2/8`;
+- task 0 after task 1: `0/8`;
+- task 1 after task 1: `2/8`;
+- sentinel after task 1: `12/25 -> 9/25`, `8` correct-to-wrong flips.
+
+Old selected keys as protected negatives:
+
+- task 0 after task 1: `1/8`;
+- task 1 after task 1: `0/8`;
+- sentinel net `12/25 -> 12/25`, but still `6` correct-to-wrong flips.
+
+Interpretation:
+
+> Old-task protection reduces damage mainly by suppressing the new write. The upstream selected key/target coordinates are still broad/generic and overlap across tasks.
+
+### Final-token-only: safe but weak
+
+All-layer last-token-only:
+
+- scale `.10`: baseline `6/39`, context `21/39`, edited `6/39`; sentinel `12/25 -> 16/25`, `1` correct-to-wrong.
+- scale `.30`: edited `4/39`; sentinel `12/25 -> 17/25`, `0` correct-to-wrong.
+
+Interpretation:
+
+> The final token is safer, but too weak or too compressed. The useful signal is distributed over content/use positions.
+
+### WICR and CORI
+
+WICR: Weight-Induced Compatibility Residual.
+
+- Same-token WICR is safe but weak.
+- Attention-edge WICR is stronger but unsafe and still does not acquire.
+
+Representative results:
+
+| method | edited | context | sentinel | c2w | before-correct drop |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| same-token WICR, scale `.03` | `4/39` | `21/39` | `12/25 -> 13/25` | `0` | `0.249` |
+| attention edges + same-token, eager, `.03` | `4/39` | `20/39` | `12/25 -> 9/25` | `6` | `5.092` |
+| attention edges only, eager, `.01` | `5/39` | `20/39` | `12/25 -> 10/25` | `2` | `1.157` |
+
+CORI: Conditional Object-Relation Innovation.
+
+It computes:
+
+> actual feature-relation coupling minus weight-implied default coupling with the same feature marginals.
+
+All-layer, no attention edges, p=`128`, rank=`16`, beta=`3`:
+
+| method | edited | context | sentinel | c2w | before-correct drop |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| CORI `svd_value`, scale `.10` | `6/39` | `21/39` | `12/25 -> 12/25` | `0` | `0.006` |
+| CORI `svd_value`, scale `3.0`, pre-orientation | `2/39` | `21/39` | `12/25 -> 12/25` | `0` | `0.099` |
+| CORI `svd_value`, scale `3.0`, oriented | `3/39` | `21/39` | `12/25 -> 11/25` | `1` | `0.404` |
+| CORI `innovation_value`, scale `3.0`, oriented | `3/39` | `21/39` | `12/25 -> 13/25` | `0` | `0.044` |
+
+At safe scale `.10`, detailed score analysis showed:
+
+- baseline `6/39`;
+- context `21/39`;
+- edited `6/39`;
+- predictions changed `0/39`;
+- context-only opportunities `19`;
+- captured `0/19`;
+- edited score movement only about `0.37%` of context-induced score movement;
+- mean cosine between edited score delta and context score delta `-0.067`.
+
+Interpretation:
+
+> CORI is safe because it is basically a no-op. Scaling does not recover acquisition. CORI may be a useful safety coordinate, but the target it writes is not the useful actuator.
+
+## What We Tested After Your STAR Proposal
+
+You proposed STAR: Schur-Transport Actuator Residual.
+
+The idea:
+
+- use CORI to obtain purified relation keys;
+- construct same-pass future residual capsules;
+- Schur-residualize nuisance/posture variables;
+- write the future integrated residual computation statistically attributable to the key;
+- return posture components as zero-target negatives.
+
+We implemented this as `schur_transport_actuator`.
+
+Files changed:
+
+- `caic/intrinsic_surprise.py`
+  - added STAR selector and same-pass future transport capsules;
+  - added selector-provided negative keys;
+  - added diagnostics.
+- `scripts/minilang_write.py`
+  - added `--intrinsic-surprise-target-mode schur_transport_actuator`;
+  - threaded future layer states into STAR;
+  - added STAR hyperparameters.
+- `tests/test_intrinsic_surprise.py`
+  - added STAR selector tests.
+
+Validation:
+
+- `.venv/bin/python -m pytest tests/test_intrinsic_surprise.py -q`
+  - `22 passed`
+- `.venv/bin/python -m pytest -q`
+  - `63 passed`
+
+### STAR score-space alignment
+
+All STAR runs:
+
+- all 28 layers;
+- MLP down only;
+- no attention edges;
+- p=`128`;
+- relation rank=`16`;
+- beta=`3`;
+- final-aligned token mode;
+- exponential weights;
+- persistence power `1`;
+- output penalty rank/weight `256/10`;
+- input penalty features/weight `1024/40`.
+
+Common baseline:
+
+- baseline `5/38`;
+- full context `20/38`;
+- expanded sentinel before `12/25`.
+
+Results:
+
+| run | scale | edited | changed | gained | lost | captured context-only | centered cosine | projection ratio | opportunity answer score gain | sentinel c2w | sentinel before-correct drop |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| STAR `.10` | `.10` | `5/38` | `0` | `0` | `0` | `0/19` | `0.035` | `0.000` | `+0.001` | `0` | `0.025` |
+| STAR `1.0` | `1.0` | `3/38` | `2` | `0` | `2` | `0/19` | `-0.300` | `-0.004` | `-0.008` | `0` | `0.157` |
+| STAR `3.0` | `3.0` | `3/38` | `2` | `0` | `2` | `0/19` | `-0.287` | `-0.013` | `-0.017` | `2` | `0.483` |
+
+Interpretation:
+
+- Safe STAR is behaviorally a no-op.
+- Active STAR moves in the wrong direction: it loses baseline-correct items and captures no context-only opportunities.
+- This is not just under-scaling. The direction is wrong.
+
+### STAR shuffle ablations
+
+We added deterministic ablation flags:
+
+- `--star-shuffle-future-targets`
+- `--star-shuffle-keys`
+
+These roll target/key rows by one position after STAR row selection, preserving row distributions while breaking intended pairing.
+
+Scale `1.0` results:
+
+| run | edited | changed | gained | lost | captured context-only | centered cosine | projection ratio | opportunity answer score gain | sentinel c2w | sentinel before-correct drop |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| real STAR | `3/38` | `2` | `0` | `2` | `0/19` | `-0.300` | `-0.004` | `-0.008` | `0` | `0.157` |
+| shuffled future targets | `5/38` | `0` | `0` | `0` | `0/19` | `-0.115` | `-0.002` | `-0.004` | `0` | `0.027` |
+| shuffled keys | `5/38` | `1` | `0` | `0` | `0/19` | `0.035` | `0.001` | `-0.007` | `0` | `0.081` |
+
+Update statistics:
+
+| run | update Fro mean/median/max | target Fro mean/median/max | explained-ratio mean/median/max |
+| --- | ---: | ---: | ---: |
+| real STAR `1.0` | `0.0213 / 0.00510 / 1.001` | `29.23 / 15.26 / 416.28` | `0.162 / 0.138 / 0.490` |
+| shuffled future `1.0` | `0.0341 / 0.00583 / 1.290` | `35.75 / 20.02 / 377.36` | `0.181 / 0.163 / 0.506` |
+
+Interpretation:
+
+- Shuffled future targets had equal or larger update norms but became a no-op.
+- Therefore real STAR pairing matters, but it matters in the wrong direction.
+- The failure is target orientation/causal relevance, not merely target size.
+
+## New Relational Safety Frontier
+
+Since STAR was misoriented, we went back to the target family that actually points toward the context teacher: `relational_aggregate` context-value.
+
+We tested whether stronger global output protection can remove the sentinel damage.
+
+### Stronger output metric penalty
+
+Settings:
+
+- all 28 layers;
+- `relational_aggregate`;
+- context-value target;
+- exponential weights;
+- persistence power `1`;
+- input penalty `1024/40`;
+- output penalty rank/weight increased from `256/10` to `1024/40`;
+- target scale `.10`.
+
+Result:
+
+| run | base | context | edited | changed | gained | lost | captured context-only | centered cosine | projection ratio | opportunity answer score gain | sentinel c2w | sentinel before-correct drop |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline relational `.10`, output `256/10` | `0/20` | `20/20` | `7/20` | `11` | `7` | `0` | `7/20` | `0.589` | `0.179` | `+0.222` | `1` | `3.847` |
+| relational `.10`, output `1024/40` | `0/20` | `20/20` | `4/20` | `13` | `4` | `0` | `4/20` | `0.613` | `0.185` | `+0.199` | `1` | `2.355` |
+
+Interpretation:
+
+- Stronger output protection reduces broad margin damage.
+- It does not remove the discrete sentinel correct-to-wrong failure.
+- Acquisition drops from `7/20` to `4/20`.
+- The edited score movement remains context-aligned.
+
+### LM-head target projection plus strong output penalty
+
+Settings:
+
+- LM-head generic target projection rank `256`;
+- output penalty rank/weight `1024/40`;
+- target scale `.10`.
+
+Result:
+
+| run | base | context | edited | changed | gained | lost | captured context-only | centered cosine | projection ratio | opportunity answer score gain | sentinel c2w | sentinel before-correct drop |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| relational `.10`, LM projection `256` + output `1024/40` | `0/20` | `20/20` | `3/20` | `13` | `3` | `0` | `3/20` | `0.615` | `0.187` | `+0.193` | `1` | `2.558` |
+
+Interpretation:
+
+- Projecting targets away from a global LM-head basis reduces acquisition further.
+- It still does not eliminate the sentinel c2w flip.
+- Therefore the damaging component is not just a broad global LM-head/readout direction.
+
+### Half-scale strong output penalty
+
+Settings:
+
+- output penalty rank/weight `1024/40`;
+- target scale `.05`.
+
+Result:
+
+| run | base | context | edited | changed | gained | lost | captured context-only | centered cosine | projection ratio | opportunity answer score gain | sentinel c2w | sentinel before-correct drop |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| relational `.05`, output `1024/40` | `0/20` | `20/20` | `0/20` | `2` | `0` | `0` | `0/20` | `0.596` | `0.121` | `+0.137` | `0` | `1.126` |
+
+Interpretation:
+
+- Halving scale removes sentinel flips.
+- It also removes discrete acquisition, though score movement remains context-aligned.
+- This confirms a safety/acquisition frontier: the useful relational target is aligned, but the unsafe component is entangled at useful scale.
+
+## Current Blunt Diagnosis
+
+Please verify, refine, or refute this:
+
+1. One-pass acquisition signal exists.
+2. The current useful signal is carried by relational/context-value target rows.
+3. Safe alternatives like CORI and STAR do not recover the useful actuator.
+4. STAR specifically falsified "Schur-residualized future residual capsule" as the next target, because active STAR is anti-aligned with context teacher.
+5. Global output/readout penalties and LM-head target projection are too blunt:
+   - they reduce margin damage;
+   - they lower acquisition;
+   - they do not remove the same sentinel c2w failure at useful scale.
+6. Therefore the missing object is a **local row/component-level decomposition** of the relational/context-value target into:
+   - useful semantic/readout/composition actuator;
+   - sentinel-sensitive component;
+   - generic answer/posture/mode component.
+
+The immediate research question is now:
+
+> How do we purify the relational aggregate context-value target itself, using only weights and one context pass, so that the closed-form update retains context-teacher alignment while avoiding sentinel-sensitive collateral movement?
+
+## What I Need From You
+
+Please propose the next implementable mathematical tool.
+
+Do not just say:
+
+- "try more scale";
+- "try more examples";
+- "use a runtime gate";
+- "go back to STAR";
+- "project harder onto LM-head/output PCs";
+- "use generated probes";
+- "meta-train it later."
+
+The request is not broad brainstorming. I need equations, tensor shapes, algorithmic steps, and diagnostic/falsification criteria.
+
+## Specific Questions
+
+### A. Is the current diagnosis right?
+
+Is the blocker now row/component-level target purification of relational/context-value writes?
+
+If not, explain exactly why the following pattern is better explained by something else:
+
+- relational aggregate has strong context-teacher alignment and acquisition;
+- relational aggregate damages sentinel margins and flips one unrelated answer at useful scale;
+- stronger global output penalty reduces but does not fix damage;
+- global LM-head target projection still leaves the c2w failure;
+- CORI is safe but inert;
+- STAR future target is safe at low scale and anti-aligned at active scale;
+- old-task protection suppresses new acquisition rather than enabling continual learning.
+
+### B. What is the correct local purification object?
+
+We currently have rows:
+
+\[
+K \in \mathbb{R}^{n \times m}, \qquad R \in \mathbb{R}^{n \times d}
+\]
+
+from relational aggregate context-value selection:
+
+- \(K\): sparse or relation-local MLP feature keys;
+- \(R\): context-value residual targets from surprising paired native channels;
+- \(m\): MLP width;
+- \(d\): residual width.
+
+The existing solve is roughly:
+
+\[
+\min_{\Delta W}
+\|W_+^{1/2}(K\Delta W^\top - R)\|^2
++ \lambda \|\Delta W\|^2
++ \rho \|B\Delta W^\top\|^2
++ \gamma \|\Pi_{\text{out}}\Delta W\|^2.
+\]
+
+This is insufficient because \(R\) itself is contaminated.
+
+Please define a purification:
+
+\[
+R = R_{\text{useful}} + R_{\text{posture}} + R_{\text{sentinel-risk}} + R_{\text{generic}}
+\]
+
+or an equivalent decomposition, using only:
+
+- current weights;
+- same-pass activations;
+- relation keys/targets;
+- local Jacobians or Fisher-like observability from the same pass;
+- weight geometry.
+
+What exactly are these subspaces or components?
+
+How do we estimate them without sentinel examples, null prompts, labels, or extra probes?
+
+### C. How do we detect sentinel-sensitive directions without sentinel examples?
+
+The sentinel failure is not killed by global LM-head PCs. We need a more local risk metric.
+
+Possible ingredients you may use:
+
+- local residual-to-logit Jacobian on same-pass lesson tokens;
+- model's own next-token distribution Fisher metric at lesson tokens;
+- downstream block Jacobian norms;
+- RMSNorm/unembedding sensitivity;
+- MLP down-value observability;
+- directions that cause large changes under generic high-confidence output states;
+- "common computation" directions inferred from low-surprise rows in the same pass;
+- directions with high fan-out through later layers;
+- directions whose effect is not conditioned on relational keys;
+- weight-induced compatibility degree or centrality.
+
+Please propose a concrete risk metric stronger than global LM-head projection.
+
+It must explain why output `1024/40` and LM projection `256` still leave the same c2w failure.
+
+### D. How do we keep the readout actuator while removing posture?
+
+The useful acquisition component appears close to readout/value movement:
+
+- relational aggregate context-value target gets acquisition;
+- output penalties reduce but do not safely separate it;
+- STAR/CORI targets that avoid this readout component become inert or wrong.
+
+So the answer cannot be "remove output-sensitive directions." Behavior must eventually touch logits.
+
+Please define a conditional criterion like:
+
+> keep output-sensitive directions only when they are locally attributable to the relational surprise key and not explainable by generic posture/mode variables.
+
+But give the actual math:
+
+- Schur complement?
+- CCA/partial regression?
+- generalized eigenproblem?
+- constrained low-rank factorization?
+- local observability quotient?
+- key-conditioned Fisher decomposition?
+- causal transport in block Jacobian coordinates?
+
+### E. What closed-form solve should replace the current one?
+
+Please define:
+
+- key construction \(K\);
+- purified target \(R_{\text{purified}}\);
+- row weights;
+- input protection;
+- output protection;
+- local sentinel-risk metric;
+- all-layer trust rule;
+- closed-form solution.
+
+If the solution is no longer a simple ridge solve, give the exact objective and solution.
+
+Examples of acceptable forms:
+
+- generalized ridge;
+- Sylvester equation;
+- generalized eigen basis plus ridge;
+- low-rank Schur complement solve;
+- constrained least squares with closed-form KKT solution;
+- natural-gradient update with diagonal/low-rank metrics.
+
+### F. What should weight-only sequential protection be?
+
+Old selected keys as negatives currently suppress new acquisition.
+
+The obvious answer would be to store a compact continual metric that protects
+old learned transformations. That is now explicitly disallowed. After a write,
+the next session gets only the updated model weights, not old selected keys,
+old activations, old atoms, Fisher/EWC sketches, task summaries, or old
+key-to-value transformation records.
+
+Please define a **weight-only** continual mechanism. It must protect previous
+learning because that learning is already embedded in the weights, not because
+a sidecar state remembers it.
+
+Questions to answer:
+
+- How can a future closed-form write infer, from current weights plus the new
+  single-pass activations, which weight-space directions are already
+  load-bearing from earlier writes?
+- Is there a synaptic/homeostatic/curvature proxy computable from weights alone
+  that prevents overwriting without storing old context traces?
+- Can the update rule make previous writes "self-protecting" by changing the
+  weight geometry itself, rather than maintaining an external protection state?
+- If this is impossible under the constraints, give the identifiability
+  argument and the weakest extra assumption that would make it possible.
+
+Give the math under the no-sidecar-state constraint.
+
+### G. What should we implement first?
+
+Please give a concrete implementation plan that fits the repo:
+
+- `caic/intrinsic_surprise.py`
+  - selector and target purification logic;
+- `caic/tsoc.py`
+  - protected ridge/metric update utilities;
+- `scripts/minilang_write.py`
+  - single-context mini-language runner;
+- `scripts/minilang_intrinsic_continual.py`
+  - sequential diagnostic;
+- `tests/test_intrinsic_surprise.py`
+  - selector/unit tests.
+
+Please provide:
+
+- new mode name;
+- tensor shapes;
+- pseudocode;
+- default hyperparameters;
+- first three runs;
+- expected pass/fail thresholds.
+
+## Minimum Pass/Fail Criteria
+
+Single-task bar:
+
+- edited score above baseline;
+- target: at least `8/20` eventually, but even `3-5/20` is meaningful only if sentinel is safe and score movement is context-aligned;
+- zero sentinel correct-to-wrong flips;
+- before-correct sentinel margin drop ideally below `1.0`;
+- prediction changes on learned-task questions move toward context-teacher choices;
+- score-space projection ratio meaningfully positive;
+- not just broad answer-option/posture shifts.
+
+Continual bar:
+
+- task 0 after task 1 not below task 0 immediately after task 0, within one item tolerance;
+- task 1 acquisition not suppressed to zero;
+- sentinel c2w flips remain zero or near zero;
+- old protection does not work merely by shrinking later updates into dust.
+
+Generality bar:
+
+- method should plausibly transfer beyond mini-language translation;
+- specify a non-translation smoke test next, such as fictional object-property relations or user-profile facts from prose.
+
+Mechanistic bar:
+
+- shuffled targets should fail;
+- relation/key shuffling should fail;
+- output/posture ablation should reveal the predicted safety/acquisition tradeoff;
+- all-layer should be no worse than selected-layer by safety metrics;
+- update should preserve positive context-teacher score-space alignment;
+- the purified update should improve over the current frontier:
+  - relational `.10`, output `1024/40`: `4/20`, c2w `1`, drop `2.355`;
+  - relational `.05`, output `1024/40`: `0/20`, c2w `0`, drop `1.126`;
+  - STAR `1.0`: `3/38`, anti-aligned, c2w `0`.
+
+## Strong Preferences For Your Answer
+
+Please structure your response like this:
+
+1. **Blunt Diagnosis**
+   - What exactly is the blocker now?
+   - Is one-pass surprise-from-weights still plausible?
+
+2. **Core Mathematical Tool**
+   - Name it.
+   - Give equations.
+   - Explain the predictive-coding/free-energy/synaptic analogy if useful.
+
+3. **Local Purification**
+   - How to decompose relational target rows/components.
+   - How to estimate local sentinel/readout risk from weights and one pass.
+   - How to keep key-conditioned useful readout while removing generic posture.
+
+4. **Closed-Form Solve**
+   - Tensor shapes.
+   - Objective.
+   - Solution.
+   - Layer trust/scaling.
+
+5. **Weight-Only Continual Mechanism**
+   - How previous learning is protected without storing old-session state.
+   - How the next solve detects already-load-bearing weight directions from
+     weights plus the new pass only.
+   - Why it protects without suppressing acquisition.
+
+6. **Minimal Implementation**
+   - files/functions;
+   - pseudocode;
+   - first three experiments.
+
+7. **Ablations And Falsification**
+   - explicit pass/fail criteria.
+
+## Important Warnings
+
+Please do **not** give us:
+
+- another runtime object gate/router as the main answer;
+- another raw feature-norm surprise rule;
+- a rebranded STAR future residual target unless you fix why it was anti-aligned;
+- "just project harder onto LM-head PCs";
+- "just use sentinels as negatives";
+- "just add more examples";
+- "just use generated probes";
+- "meta-train the writer" as the immediate next step;
+- a benchmark-specific translation parser;
+- a rule that uses labels or heldout questions.
+
+My strongest current hypothesis:
+
+\[
+\boxed{
+\text{The useful object is already inside relational context-value targets,}
+\quad
+\text{but it must be purified locally, not replaced globally.}
+}
+\]
+
+Find the closed-form local purification rule.
+
+## Postscript: KARP v1 Implemented And Partially Tested
+
+After this request was written, GPT-5.5 Pro proposed KARP: Key-Attributable
+Readout Purification. We implemented a first KARP wrapper around the existing
+`relational_aggregate` context-value update.
+
+KARP idea:
+
+\[
+\text{risk}(p,q)
+\approx
+\frac{p^\top C_G p}{p^\top C_S p+\epsilon}
+\cdot
+\frac{q^\top F_G q}{q^\top F_S q+\epsilon}.
+\]
+
+It shrinks key x value atoms only when they are both generic-key active and
+generic-output observable.
+
+Implementation notes:
+
+- First KARP basis used only top generic-risk generalized directions. It barely
+  touched the actual update: mean removed update ratio `0.014`.
+- We fixed this by using a mixed signal+risk basis, so KARP decomposes the
+  actual relational candidate map rather than only diagnosing risk directions.
+- Tests pass: `.venv/bin/python -m pytest -q` -> `64 passed`.
+
+Results on the teacher-filtered 20-question eval:
+
+| run | edited | centered cosine | projection ratio | sentinel c2w | before-correct drop |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| relational `.10`, output `1024/40` | `4/20` | `0.613` | `0.185` | `1` | `2.355` |
+| relational `.05`, output `1024/40` | `0/20` | `0.596` | `0.121` | `0` | `1.126` |
+| mixed KARP eta-cross `2.0` | `0/20` | `0.426` | `0.100` | `0` | `1.859` |
+| mixed KARP eta-cross `.50`, eta-key/value `.05/.02` | `3/20` | `0.518` | `0.130` | `0` | `2.215` |
+| mixed KARP eta-cross `.25`, eta-key/value `.02/.01` | `3/20` | `0.536` | `0.130` | `1` | `2.418` |
+| product-only KARP `.50` | `1/20` | `0.548` | `0.135` | `1` | `2.034` |
+
+Current interpretation:
+
+- KARP is directionally useful: it gives the first point with nonzero
+  acquisition (`3/20`) and zero sentinel correct-to-wrong flips.
+- It is not solved: before-correct sentinel margin drop is still high (`2.215`)
+  and acquisition is below the unsafe `4/20` strong-output relational run.
+- Product-only KARP is worse, so the additive key/value rails help.
+- The remaining blocker is likely that the value-risk metric is still too
+  blunt. It uses LM-head/output basis plus low-surprise same-pass outputs, but
+  this is not yet a sharp sentinel-risk observability metric.
+
+If sending a new request to GPT-5.5 Pro, the next question should be:
+
+> KARP product-risk purification improved the discrete c2w frontier but still
+> over-prunes useful acquisition and leaves large sentinel margin drops. How do
+> we build a one-pass, weight-only value-risk/observability metric that
+> identifies sentinel-sensitive value atoms more locally than LM-head PCs plus
+> low-surprise MLP outputs, while preserving context-teacher-aligned readout
+> atoms?
+
+## Postscript 2: KARP Local Fisher And Layer Trust Tested
+
+We then tested two direct KARP refinements.
+
+### Same-pass local Fisher value-risk basis
+
+Implementation:
+
+- Added a cheap local Fisher approximation from the lesson pass.
+- For selected lesson positions, take the model's own top-k next-token
+  distribution.
+- Build factors:
+
+\[
+\sqrt{p_i}(W_U[i]-\mathbb{E}_p[W_U]).
+\]
+
+- Use those factors only as a KARP value-side risk basis.
+- No labels, no sentinels, no null prompts, no generated probes, no gradient
+  training.
+
+Results:
+
+| run | edited | centered cosine | projection ratio | c2w | before-correct drop |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| mixed KARP `.50`, output `1024/40` | `3/20` | `0.518` | `0.130` | `0` | `2.215` |
+| KARP + local Fisher rank `32` + output `1024/40` | `2/20` | `0.526` | `0.130` | `0` | `2.247` |
+| KARP + local Fisher rank `32`, no output penalty | `1/20` | `0.202` | `0.042` | `4` | `3.148` |
+
+Interpretation:
+
+- Appending local Fisher to the existing global output basis does almost
+  nothing useful.
+- Using local Fisher without global output protection is unsafe and
+  misaligned.
+- The global output penalty is doing real safety work.
+- The cheap top-k local Fisher basis does not identify the specific
+  sentinel-sensitive value atoms.
+
+### KARP layer-risk trust scalar
+
+Implementation:
+
+Scale each layer's update by:
+
+\[
+s_l=\min(1,\sqrt{b/(r_l+\epsilon)}),
+\]
+
+where \(r_l\) is `karp_cross_risk_after` and \(b\) is the risk budget.
+
+Results:
+
+| run | edited | centered cosine | projection ratio | c2w | before-correct drop |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| mixed KARP `.50` | `3/20` | `0.518` | `0.130` | `0` | `2.215` |
+| KARP trust budget `.25` | `1/20` | `0.407` | `0.088` | `0` | `1.839` |
+| KARP trust budget `.50` | `1/20` | `0.472` | `0.109` | `0` | `1.871` |
+
+Interpretation:
+
+- Layer trust improves sentinel margin safety but collapses acquisition.
+- It behaves like a smarter scale-down, not a new purification axis.
+- KARP's current cross-risk metric is correlated with useful acquisition
+  energy, so using it directly as a trust gate removes threshold-crossing
+  behavior.
+
+### Updated diagnosis
+
+The problem is now sharper:
+
+1. The useful actuator still lives in the `relational_aggregate` context-value
+   map.
+2. KARP product-risk purification is directionally right because it gives
+   nonzero acquisition with zero c2w.
+3. But current value-risk estimates are too blunt:
+   - LM-head PCs are broad;
+   - low-surprise same-pass outputs are broad;
+   - cheap local Fisher is broad or mislocalized;
+   - post-KARP cross-risk catches useful acquisition too.
+4. The missing metric is not generic output observability. The model must touch
+   output/readout directions to answer.
+
+The next thing we need is a one-pass, weight-derived metric for:
+
+\[
+\frac{
+\text{predicted unrelated/collateral margin movement}
+}{
+\text{predicted context-teacher-aligned movement}
+}
+\]
+
+or an equivalent atom-level objective that preserves readout atoms when they
+are conditionally useful but suppresses atoms that create broad collateral MC
+posture movement.
+
+Please do not propose:
+
+- another runtime gate/router;
+- using sentinel examples as negatives;
+- generated probes;
+- null prompts;
+- next-token training;
+- a plain local Fisher basis;
+- simply lowering the update scale.
+
+We need the next mathematical tool after KARP: a sharper atom-side risk metric
+or target decomposition that can keep the `3/20` acquisition path, reduce
+before-correct sentinel margin drop below about `1.0`, and eventually scale to
+continual learning.
+
+## Postscript 3: SHARP-KARP Shadow Anchors Tested And Mostly Falsified
+
+GPT-5.5 Pro then proposed SHARP-KARP: signed shadow-anchor readout purification.
+The idea was to use low-surprise, high-confidence same-pass tokens as a proxy
+for stable ambient model beliefs, then penalize key-value atoms that the
+candidate write predicts will lower those same-pass top-vs-runner margins.
+
+We implemented it as:
+
+```text
+--intrinsic-target-purifier sharp_karp
+```
+
+with two solve modes:
+
+- `ridge`: coefficient-space refit of the relational target with shadow anchor
+  penalties;
+- `shrink`: post-hoc attenuation of risky atoms in the existing candidate map.
+
+Implementation details:
+
+- compact key/value bases from mixed signal+risk rows;
+- same-pass top-logit LM-head row lookup precomputed once per lesson;
+- shadow anchors selected from low-surprise, high-confidence, low-overlap
+  tokens, with fallback to avoid starving the anchor set;
+- logit-lens top-vs-runner margin gradients as value-side shadow factors;
+- hardening against ill-conditioned SVD/pinv failures and non-finite atom
+  coefficients;
+- empty all-layer relational selections now no-op instead of crashing.
+
+Validation:
+
+```bash
+.venv/bin/python -m pytest -q
+# 65 passed
+```
+
+Results on the same teacher-filtered 20-question eval:
+
+| run | edited | centered cosine | projection ratio | c2w | before-correct drop |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| relational `.10`, output `1024/40` | `4/20` | `0.613` | `0.185` | `1` | `2.355` |
+| mixed KARP `.50` | `3/20` | `0.518` | `0.130` | `0` | `2.215` |
+| SHARP ridge, sparse anchors | `3/20` | `0.617` | `0.154` | `3` | `4.454` |
+| SHARP ridge, anchor fallback | `3/20` | `0.596` | `0.148` | `4` | `4.589` |
+| SHARP shrink r16, eta `.35`, shadow `1.5` | `0/20` | `0.230` | `0.038` | `0` | `0.951` |
+| SHARP shrink r16, eta `.10`, shadow `.5` | `1/20` | `0.253` | `0.043` | `0` | `0.967` |
+
+Interpretation:
+
+- SHARP ridge/refit is unsafe. It rebuilds the map and can amplify harmful
+  atoms even with many anchors.
+- SHARP shrink is safe but mostly inert. It gets the margin target (`drop < 1`)
+  but removes the context-teacher-aligned acquisition path.
+- Same-pass stable-margin drop is too correlated with useful acquisition atoms.
+  Penalizing it works as a structured scale-down, not as a clean collateral
+  damage separator.
+
+This falsifies the strong version of:
+
+```text
+same-pass stable-margin preservation ~= unrelated-capability preservation
+```
+
+with the current logit-lens anchor construction.
+
+Updated ask:
+
+Please do **not** propose another plain same-pass Fisher/margin-anchor penalty
+unless it explains why SHARP shrink collapses acquisition. We need a metric
+closer to:
+
+\[
+\frac{
+\text{predicted off-task option reordering under generic MC/question states}
+}{
+\text{predicted teacher-aligned option reordering under learned-object states}
+}
+\]
+
+but still under the hard constraints:
+
+- one lesson/context forward pass;
+- no sentinel examples as negatives;
+- no generated probes;
+- no null/default prompts;
+- no labels or heldout data;
+- no next-token training;
+- no runtime router.
+
+The next proposal should explain how to identify collateral option/readout
+damage without using same-pass stable margins as the main proxy, because SHARP
+shows that proxy protects by deleting the useful readout actuator.
+
+## Postscript 4: ORCA-KARP Implemented And First Tested
+
+GPT-5.5 Pro then proposed ORCA-KARP: Object-Relative Contrastive Actuator
+Purification.
+
+ORCA keeps the existing useful target family, `relational_aggregate`
+context-value, but changes the atom risk metric. Instead of asking whether an
+atom is globally readout-sensitive or whether it lowers same-pass stable
+margins, it asks whether the atom's local option-space effect is parallel to
+the relational target after same-pass nuisance residualization.
+
+Implemented:
+
+- `OrcaKarpPurificationResult`;
+- `_mixed_signal_risk_candidate_basis(...)`;
+- `orca_karp_purify_update(...)`;
+- `--intrinsic-target-purifier orca_karp`;
+- ORCA flags for ranks, option top-k, object/off-object basis ranks, atom
+  penalties, signal floor, and nuisance ridge;
+- a synthetic unit test showing ORCA keeps target-parallel option atoms more
+  than target-orthogonal atoms.
+
+Verification:
+
+```bash
+.venv/bin/python -m pytest tests/test_intrinsic_surprise.py -q
+# 25 passed
+
+.venv/bin/python -m pytest -q
+# 66 passed
+```
+
+Initial engineering result:
+
+- literal ORCA with rank `48/48` and no signal floor saturated the atom penalty;
+- `orca_atom_diag_mean` was near cap, all `2304` atoms were shrunk by more than
+  50%, and signal retention was nearly zero;
+- we added a robust signal floor and optimized the off-object basis path so
+  local runs are tractable.
+
+Main behavioral results so far use:
+
+- all 28 layers;
+- 6 lessons, 8 examples;
+- teacher-filtered 20-question eval;
+- expanded 25-question sentinel suite;
+- `relational_aggregate`, context value;
+- scale `.10`;
+- output/input protection `256/10` and `256/20`.
+
+| run | edited | changed | centered cos | projection ratio | c2w | before-correct drop |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| relational `.10`, output `256/10`, input `256/20` | `6/20` | `11` | `0.578` | `0.183` | `3` | `4.688` |
+| ORCA r16 soft | `6/20` | `11` | `0.544` | `0.166` | `1` | `2.956` |
+| ORCA r16 medium | `4/20` | `9` | `0.479` | `0.155` | `2` | `2.008` |
+
+Soft ORCA settings:
+
+```bash
+--orca-key-rank 16
+--orca-value-rank 16
+--orca-option-top-k 8
+--orca-object-rank 64
+--orca-off-object-rank 128
+--orca-eta-orth 0.02
+--orca-eta-posture 0.01
+--orca-eta-off-object 0.02
+--orca-eta-karp 0.05
+--orca-signal-floor-quantile 0.50
+--karp-eta-key 0.01
+--karp-eta-value 0.005
+```
+
+ORCA r16 soft diagnostics over 168 updates:
+
+- mean removed update ratio: `0.541`;
+- mean signal retention: `0.302`;
+- mean candidate capture ratio: `0.696`;
+- mean atom penalty: `34.47`;
+- mean ORCA option signal: `0.0076`.
+
+Interpretation:
+
+- ORCA is not safe enough yet: the hard target remains c2w `0`, and ORCA soft
+  still has c2w `1`.
+- But unlike SHARP, ORCA does not simply erase acquisition. It preserved the
+  `6/20` acquisition of the weak-protection relational baseline while reducing
+  c2w from `3` to `1` and before-correct drop from `4.688` to `2.956`.
+- Stronger ORCA did not monotonically improve discrete safety: drop improved,
+  but acquisition fell and c2w worsened to `2`.
+- The cheap top-k option map marks most candidate atoms as target-orthogonal
+  (`orca_orthogonal_mean ~0.99`), so the coordinate is likely under-calibrated.
+- Rank-16 candidate capture is only about `0.70`; higher-rank ORCA should be
+  tested on a faster backend or after further optimization.
+
+Current narrowed blocker:
+
+> ORCA's object-relative option coordinate is directionally useful, but the
+> current cheap top-k logit-lens implementation is still too blunt. We need to
+> validate whether ORCA-kept and ORCA-removed atoms actually separate
+> acquisition from sentinel damage.
+
+Recommended next work:
+
+1. Add ORCA atom ablations:
+   - kept atoms only;
+   - removed atoms only;
+   - top-risk removed atoms only;
+   - top-signal kept atoms only.
+2. Run ORCA r32/r48 on the `1024/40` protection stack, preferably not on local
+   MPS.
+3. Improve the option-space map:
+   - compare top-k LM-head contrast to exact local RMSNorm/logit VJP on a small
+     layer subset;
+   - test whether per-option-family centering is needed.
+4. If ablations validate ORCA's atom ranking, move from post-hoc shrink to a
+   closed-form coefficient-space solve.
+
+## Postscript 5: ORCA Ablations Found A New Failure Mode
+
+We implemented ORCA ablation modes and ran the three-way decomposition.
+
+Modes:
+
+- `kept_only`: apply only projected atoms kept by ORCA;
+- `removed_only`: apply only projected atoms removed by ORCA;
+- `residual_only`: apply only the component outside the mixed ORCA key/value
+  basis.
+
+Verification:
+
+```bash
+.venv/bin/python -m pytest tests/test_intrinsic_surprise.py -q
+# 25 passed
+
+.venv/bin/python -m pytest -q
+# 66 passed
+```
+
+Matched weak-protection setting:
+
+- all 28 layers;
+- 6 lessons, 8 examples;
+- teacher-filtered 20-question eval;
+- expanded 25-question sentinel suite;
+- `relational_aggregate`, context value;
+- scale `.10`;
+- output protection `256/10`;
+- input protection `256/20`;
+- ORCA r16 soft.
+
+Results:
+
+| run | edited | changed | centered cos | projection ratio | c2w | before-correct drop |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline relational `.10` | `6/20` | `11` | `0.578` | `0.183` | `3` | `4.688` |
+| ORCA purified | `6/20` | `11` | `0.544` | `0.166` | `1` | `2.956` |
+| ORCA kept-only | `1/20` | `3` | `-0.041` | `-0.006` | `1` | `1.011` |
+| ORCA removed-only | `1/20` | `1` | `0.377` | `0.046` | `1` | `1.129` |
+| ORCA residual-only | `9/20` | `13` | `0.603` | `0.157` | `2` | `1.287` |
+
+Mean update decomposition:
+
+| run | update Fro | basis residual Fro | projected Fro | kept projected Fro | removed projected Fro |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| kept-only | `0.420` | `1.532` | `1.410` | `0.420` | `1.087` |
+| removed-only | `0.536` | `0.693` | `0.796` | `0.309` | `0.536` |
+| residual-only | `1.679` | `1.679` | `1.582` | `0.488` | `1.228` |
+
+Strong-protection residual-only:
+
+| run | edited | changed | centered cos | projection ratio | c2w | before-correct drop |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| ORCA residual-only, output/input `1024/40` | `2/20` | `8` | `0.618` | `0.155` | `1` | `0.426` |
+
+Sentinel accuracy improved overall on that run (`12/25 -> 15/25`), but one
+previously correct sentinel still flipped: "Which animal is known for barking?"
+changed from `Dog` to `Cloud`.
+
+### Updated diagnosis for 5.5 Pro
+
+The ablations falsify the simple "ORCA kept atoms are useful, removed atoms are
+toxic" story.
+
+Instead:
+
+- ORCA-kept projected atoms are mostly inert.
+- ORCA-removed projected atoms are also mostly inert.
+- The acquisition-heavy, teacher-aligned component is the basis residual outside
+  the current mixed ORCA atom subspace.
+- Stronger protection preserves the centered teacher alignment of that residual
+  component but crushes acquisition from `9/20` to `2/20`, while still leaving a
+  single sentinel c2w.
+
+So the new blocker is:
+
+> How do we build a closed-form purifier for the acquisition-bearing basis
+> residual, rather than classifying atoms inside a low-rank basis that mostly
+> captures inert/generic projected movement?
+
+Please propose the next mathematical tool under the original constraints:
+
+- one lesson/context forward pass only;
+- closed-form solve only;
+- no generated probes, null prompts, quizzes, labels, next-token training,
+  runtime router/RAG, or SAE;
+- must be compatible with all-layer writes;
+- target is a general surprise/consolidation rule, not translation-specific.
+
+The result we want is not necessarily `20/20`. A useful next frontier would be:
+
+- `6-10/20` acquisition;
+- `0` sentinel correct-to-wrong flips;
+- before-correct sentinel margin drop below about `1.0`;
+- positive centered teacher alignment/projection;
+- a path to continual learning where old learned transformations are preserved
+  without stored sidecar state and without suppressing the next write into zero.
+
+The sharp question:
+
+> What is the right residual-coordinate geometry after quotienting the ORCA
+> mixed basis, and how should the remaining single c2w failure be removed
+> without deleting the residual component that produces acquisition?
+
+## Postscript 6: Q-RICO Was Explored And Under-Acquires
+
+We implemented your proposed Q-RICO direction and tested both low-rank
+reconstruction and direct residual-filter versions.
+
+Implementation:
+
+- `--intrinsic-target-purifier qrico`
+- Q-RICO around `relational_aggregate`, context value;
+- quotient residual map `M_perp = M0 - Pi_U M0 Pi_V`;
+- target-orthogonal option-scramble metric from same-pass top-logit contrast
+  rows;
+- two solve modes:
+  - `sylvester`: rebuild a low-rank residual map from key/value bases;
+  - `residual_filter`: keep the direct quotient residual map and shrink
+    target-orthogonal value-side option-scramble directions;
+- no full update-map SVD in the final implementation; it uses QR row bases plus
+  cheap map-probe rows for runtime.
+
+Verification:
+
+```bash
+.venv/bin/python -m pytest -q
+# 69 passed
+```
+
+All runs:
+
+- all 28 layers;
+- 6 lessons, 8 examples;
+- teacher-filtered 20-question eval;
+- expanded 25-question sentinel suite;
+- `relational_aggregate`, context value;
+- output/input weak stack `256/10`, `256/20`;
+- top-32 option contrasts.
+
+Results:
+
+| run | edited | changed | centered cos | projection ratio | c2w | before-correct drop |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Q-RICO CCA, deflate `16/16`, trust on, scale `.10` | `2/20` | `7` | `0.537` | `0.121` | `3` | `2.542` |
+| Q-RICO map-probe CCA, deflate `16/16`, trust on, scale `.10` | `0/20` | `0` | `0.149` | `0.006` | `0` | `0.105` |
+| Q-RICO map-probe CCA, deflate `4/4`, no trust, scale `.10` | `1/20` | `1` | `0.592` | `0.096` | `0` | `0.569` |
+| Q-RICO map-probe CCA, no deflate, no trust, scale `.10` | `1/20` | `3` | `0.568` | `0.127` | `1` | `2.327` |
+| Q-RICO residual-filter, deflate `4/4`, no trust, scale `.10` | `1/20` | `4` | `0.638` | `0.125` | `0` | `0.219` |
+| Q-RICO residual-filter, deflate `4/4`, no trust, scale `.20` | `1/20` | `12` | `0.606` | `0.174` | `0` | `1.978` |
+
+Comparison target:
+
+| run | edited | changed | centered cos | projection ratio | c2w | before-correct drop |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| ORCA residual-only, scale `.10` | `9/20` | `13` | `0.603` | `0.157` | `2` | `1.287` |
+
+Interpretation:
+
+Q-RICO's safety intuition is partly right, but the reconstruction/filtering
+does not preserve the behaviorally useful threshold-crossing component.
+
+Important observations:
+
+- The low-rank CCA route is too lossy. It can report high row capture but still
+  fail behaviorally.
+- The direct residual-filter version is the best Q-RICO form: at scale `.10`,
+  it gets `0` c2w and low sentinel drop (`0.219`) while retaining positive
+  teacher alignment (`centered cos 0.638`, projection ratio `0.125`).
+- But it only gets `1/20`; increasing scale to `.20` increases churn and margin
+  damage without improving acquisition.
+- No-deflation Q-RICO is not a rescue: it remains `1/20` and reintroduces a c2w.
+
+So the updated blocker is sharper:
+
+> ORCA residual-only contains the threshold-crossing acquisition component, but
+> Q-RICO-style option-scramble filtering removes or fails to preserve that
+> component. We need a full-rank/high-rank purification of the direct residual
+> map, not a low-rank residual reconstruction and not a value-only option
+> filter.
+
+Please propose the next mathematical tool under the same constraints:
+
+- one lesson/context forward pass only;
+- closed-form solve only;
+- no generated probes, null prompts, quizzes, labels, next-token training,
+  runtime router/RAG, or SAE;
+- all-layer compatible;
+- general surprise/consolidation rule, not translation-specific.
+
+The next method should specifically answer:
+
+1. How do we keep the direct residual map's behavior-threshold component that
+   gives `9/20`?
+2. How do we remove the `2` c2w failures from ORCA residual-only without
+   collapsing acquisition to `1/20`?
+3. What diagnostic can tell whether a purifier is preserving threshold-crossing
+   acquisition rather than only preserving small positive teacher-aligned score
+   movement?
+
+## Postscript 7: SPECTRA Was Implemented; Q-RICO Key16 Is The Current Safe Frontier
+
+We implemented the SPECTRA direction you proposed:
+
+- `--intrinsic-target-purifier spectra`;
+- high-rank residual map kept directly;
+- tail functionals preserved by closed-form rank-one constraints;
+- generic option-contrast hazards clipped by closed-form rank-one constraints;
+- tests added for tail preservation and hazard clipping.
+
+Verification:
+
+```bash
+.venv/bin/python -m pytest -q
+# 71 passed
+```
+
+But two things changed the diagnosis.
+
+First, the earlier Q-RICO comparison had a confound. Q-RICO was run with
+`key_feature_top_k=8`, while ORCA residual-only used `key_feature_top_k=16`.
+Re-running the best Q-RICO residual-filter setup with key16 gave:
+
+| run | edited | changed | centered cos | projection ratio | c2w | before-correct drop |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Q-RICO key16, scale `.10` | `5/20` | `11` | `0.578` | `0.162` | `0` | `0.964` |
+
+Scale pressure failed:
+
+| run | edited | changed | centered cos | projection ratio | c2w | before-correct drop |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Q-RICO key16, scale `.15` | `4/20` | `10` | `0.515` | `0.146` | `7` | `6.738` |
+| Q-RICO key16, scale `.20` | `5/20` | `10` | `0.584` | `0.163` | `6` | `5.032` |
+
+So the best safe single-task frontier is now:
+
+\[
+5/20,\quad 0\text{ c2w},\quad \text{before-correct drop}=0.964.
+\]
+
+Second, the first SPECTRA implementation was safe but too weak:
+
+| run | edited | changed | centered cos | projection ratio | c2w | before-correct drop |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| SPECTRA fast, hazard rank `4`, budget `.25` | `2/20` | `2` | `0.292` | `0.032` | `0` | `0.262` |
+| SPECTRA fast, no-hazard | `2/20` | `2` | `0.137` | `0.010` | `0` | `0.201` |
+| SPECTRA fast, mild hazard rank `1`, budget `.50` | `1/20` | `2` | `-0.235` | `-0.019` | `0` | `0.130` |
+
+The diagnostic was decisive: tail retention was ~`0.999` and correction norm
+was tiny, but no-hazard was already weak. Therefore the problem was not the
+hazard clipping. It was that the fast quotient basis did not preserve the ORCA
+residual-only acquisition component.
+
+We patched SPECTRA to use the exact ORCA mixed basis, but the exact-basis
+all-layer jobs ran for more than 35 minutes without completing. That route needs
+optimization before it is useful.
+
+Current state:
+
+| method | acquisition | safety |
+| --- | ---: | --- |
+| ORCA residual-only weak stack | `9/20` | unsafe: `2` c2w, drop `1.287` |
+| Q-RICO key16 residual-filter `.10` | `5/20` | safe: `0` c2w, drop `0.964` |
+| SPECTRA fast | `2/20` | safe but too weak |
+
+Updated blocker:
+
+> The best safe method is now Q-RICO key16, not SPECTRA. SPECTRA may still be
+> conceptually right, but only if exact ORCA quotienting can be made cheap
+> enough and shown to reproduce residual-only behavior in a no-hazard verifier.
+> Scaling Q-RICO is not the answer because sentinel c2w returns immediately.
+
+Near-term research questions:
+
+1. How should Q-RICO key16 be extended to continual learning? The continual
+   script now supports Q-RICO. Old-key negatives are too crude, and stored old
+   transformation protection is now disallowed; we need a weight-only analogue.
+2. Can Q-RICO's `5/20` safe acquisition be improved by key/row construction
+   rather than scale?
+3. Is there a cheap exact-ORCA quotient for SPECTRA, or should SPECTRA be
+   dropped until we have a better basis construction?
+4. What single-pass diagnostic predicts the sharp safety cliff between Q-RICO
+   `.10` and `.15`?
+
+## Postscript 8: The Primary Benchmark Is Now Two-Task Continual Learning
+
+We agree that single-task acquisition is the wrong main hill. It was useful for
+finding a safe one-context actuator, but the actual goal is sequential learning
+without capability damage.
+
+We updated the continual runner to support Q-RICO/SPECTRA purifier flags and
+added a compact summarizer:
+
+- `scripts/minilang_intrinsic_continual.py` now exposes the same purifier flags
+  as `scripts/minilang_write.py`;
+- `scripts/summarize_continual_run.py` reports task acquisition, retention, and
+  sentinel shifts;
+- changed continual default
+  `--intrinsic-surprise-input-penalty-usage-power` from `1.0` to `0.0` so it
+  matches the safe single-task Q-RICO setup unless overridden.
+
+Verification:
+
+```bash
+.venv/bin/python -m py_compile scripts/summarize_continual_run.py
+.venv/bin/python -m pytest -q
+# 71 passed
+```
+
+Two-task benchmark settings:
+
+- tasks: Lyran then Vomar;
+- 6 lessons/task, 8 examples/lesson;
+- teacher-filtered 8-question eval per task;
+- all 28 layers;
+- Q-RICO residual-filter;
+- key feature top-k `16`;
+- scale `.10`;
+- output/input weak stack `256/10`, `256/20`;
+- input penalty usage power `0.0`;
+- expanded sentinel suite.
+
+### No old-task protection
+
+| step | eval task | edited | delta vs base | retention delta |
+| ---: | --- | ---: | ---: | ---: |
+| 0 | Lyran | `3/8` | `+2/8` | `0` |
+| 1 | Lyran | `2/8` | `+1/8` | `-1/8` |
+| 1 | Vomar | `0/8` | `-1/8` | `0` |
+
+Sentinel:
+
+| step | sentinel acc | c2w | before-correct drop |
+| ---: | ---: | ---: | ---: |
+| 0 | `18/25` | `0` | `1.717` |
+| 1 | `18/25` | `1` | `3.721` |
+
+Interpretation: task 0 weakly acquires, then partially forgets; task 1 does not
+acquire; sentinel safety breaks after the second write.
+
+### Old selected keys as negatives
+
+| step | eval task | edited | delta vs base | retention delta |
+| ---: | --- | ---: | ---: | ---: |
+| 0 | Lyran | `2/8` | `+1/8` | `0` |
+| 1 | Lyran | `2/8` | `+1/8` | `0` |
+| 1 | Vomar | `1/8` | `0/8` | `0` |
+
+Sentinel:
+
+| step | sentinel acc | c2w | before-correct drop |
+| ---: | ---: | ---: | ---: |
+| 0 | `18/25` | `0` | `0.601` |
+| 1 | `19/25` | `0` | `0.628` |
+
+Interpretation: old-key negatives preserve task 0 and sentinel safety, but task
+1 stays at baseline. Update diagnostics show why:
+
+- task 0 mean update Frobenius: `2.76`;
+- task 1 mean update Frobenius with old negatives: `1.37`.
+
+So the old-key method mostly preserves by shrinking/suppressing the next write.
+
+### Updated blocker
+
+The method is not yet a continual learner.
+
+Q-RICO key16 `.10` can safely acquire a little from one context, but in
+sequence:
+
+- no old protection causes forgetting and sentinel damage;
+- old-key protection preserves but suppresses new acquisition.
+
+The previous interpretation was "protect old key-to-value transformations, not
+old keys." The new hard constraint refines this: the method cannot store old
+transformations either. Any protection must be encoded in the updated weights
+themselves, or be inferable later from the current weights plus the new single
+context pass.
+
+The two-task benchmark should now be the main objective:
+
+\[
+\text{task0 immediate} > \text{base},\quad
+\text{task0 after task1} \ge \text{task0 immediate},\quad
+\text{task1 immediate} > \text{base},\quad
+\text{sentinel c2w}=0.
+\]
+
+Please focus the next proposal on this continual-learning objective, not
+single-task `20/20` acquisition, and obey the no-sidecar-state rule.
+
+## Postscript 9: New Hard Constraint - No Cross-Session Stored State
+
+We are adding a stricter deployment constraint.
+
+After the model reads a context and performs the closed-form write, the next
+context/session must receive only the updated model weights. The system may not
+carry forward any separate data structure from previous sessions:
+
+- no stored selected keys;
+- no old-task negative banks;
+- no activation traces;
+- no examples or summaries;
+- no low-rank atoms;
+- no old key-to-value transformation records;
+- no Fisher/EWC/Laplace/sketch metrics;
+- no runtime routers or memory slots.
+
+This means old-key negatives and old-transformation metrics are now diagnostic
+ablations only. They are not acceptable final answers.
+
+The research question is now sharper:
+
+> Can a one-pass closed-form surprise write make learned transformations
+> self-preserving inside the weights, so future writes computed only from the
+> current weights and a new single context pass do not overwrite them?
+
+Please update any proposed continual-learning mechanism accordingly. If you
+believe this is impossible, give the formal identifiability or information
+argument, and state the weakest additional assumption that would make it
+possible while staying close to the spirit of weight-only consolidation.
+
+## Postscript 10: OCEP-Q Tested and Mostly Falsified
+
+After your OCEP-Q proposal, I implemented it as a post-solve purifier:
+
+- `ocep_residual`: applied to the direct relational aggregate context-value
+  candidate;
+- `ocep_qrico`: Q-RICO residual-filter first, then OCEP;
+- no sidecar state, no old keys/transforms, no probes;
+- object-key basis from selected weighted keys;
+- generic key basis from current down/value geometry, high-upstream-norm
+  one-hot channel anchors, low-surprise same-pass keys, and protected negative
+  rows already used by the solve;
+- option/readout basis from output basis, target rows, and same-pass top-logit
+  contrasts.
+
+Implementation tests passed:
+
+```bash
+.venv/bin/python -m pytest -q
+# 78 passed
+```
+
+Single-task all-layer results on the same regenerated 20-item eval split:
+
+| run | edited | sentinel c2w | before-correct drop | notes |
+| --- | ---: | ---: | ---: | --- |
+| OCEP residual, object rank 64, cap .35 | `1/20` | `6` | `5.586` | leakage reduced `0.704`, object disturbed `0.105` |
+| OCEP residual, object rank 256, cap .10 | `4/20` | `5` | `5.636` | object delta `0.000`, leakage reduced `0.191` |
+| OCEP-Q, object rank 256, cap .10 | `1/20` | `0` | `0.849` | safe but inert |
+| Q-RICO residual-filter control | `1/20` | `0` | `0.742` | same split/settings as OCEP-Q |
+
+Baseline was `2/20`, context was `15/20`, expanded sentinel before was `12/25`.
+
+Interpretation:
+
+- aggressive OCEP is unsafe and non-acquiring;
+- object-preserving OCEP can recover some acquisition (`4/20`) but remains very
+  unsafe (`5` c2w);
+- OCEP-Q is safe but does not recover acquisition beyond Q-RICO on this split;
+- preserving the selected object-key span exactly is not enough to prevent
+  sentinel damage.
+
+Current diagnosis update:
+
+The unsafe acquisition component is not captured by this local
+generic-key × option-basis leakage sketch. The dangerous part may be:
+
+1. a more specific target-row-to-option interaction rather than a generic key
+   interaction;
+2. an update that is locally safe but becomes generic after propagation through
+   later frozen layers;
+3. additive false evidence in a downstream readout coordinate not visible in
+   the local MLP-down option atlas;
+4. or a broader issue: local post-solve output filters are the wrong class of
+   tool, because they repeatedly trade acquisition for safety.
+
+Please propose the next implementable mathematical tool under the same hard
+constraints:
+
+- one forward pass from the lesson/context;
+- closed-form solve;
+- surprise-driven;
+- all-layer compatible;
+- no probes/null prompts/quizzes/labels/SAE/RAG/router;
+- no sidecar state across sessions after weights are written;
+- primary success should be two-task learning plus sentinel preservation, not
+  single-task frontier-chasing.
+
+Given the OCEP result, I am especially interested in either:
+
+- a safety metric based on predicted downstream propagation of the update
+  through later frozen layers, still computed closed-form from the same pass and
+  current weights; or
+- a different weight-only consolidation mechanism that makes learned
+  transformations self-preserving without gauge-scale distortion or stored
+  metadata.
+
+## Postscript 11: Benchmark Harness and SPECTRA Runtime Check
+
+I added a standardized two-task benchmark launcher:
+
+```text
+scripts/continual_benchmark_grid.py
+```
+
+It prints or runs Modal/local commands for the current primary benchmark:
+
+- two tasks, Lyran then Vomar;
+- 6 lessons/task, 8 examples/lesson;
+- teacher-filtered 8-question eval per task;
+- all layers `0..27`;
+- relational aggregate context-value target;
+- final-aligned token selection;
+- key feature top-k `16`;
+- target scale `.10`;
+- output/input protection `256/10`, `256/20`;
+- input penalty usage power `0.0`;
+- expanded sentinel suite.
+
+Registered presets:
+
+- `relational_raw`;
+- `qrico_key16`;
+- `spectra_noquotient`;
+- `ocep_residual`;
+- `ocep_qrico`;
+- `seal_qrico_no_apply`.
+
+Verification:
+
+```bash
+.venv/bin/python -m py_compile scripts/continual_benchmark_grid.py
+.venv/bin/python -m pytest -q
+# 78 passed
+```
+
+I also started a Modal run for direct-map SPECTRA without ORCA quotient:
+
+```text
+/modal-runs/spectra_noquotient_continual_s010_20260521
+```
+
+It loaded the model, teacher-filtered both tasks, scored both before-write
+baselines, entered task-0 writing, and then stayed inside the write phase for
+more than 10 minutes. I stopped the Modal app. So this is not a behavioral
+score, but it is a practical falsifier for the current SPECTRA implementation:
+even the no-quotient variant is too slow for the all-layer two-task research
+loop.
+
+Please treat the next proposal as needing to be cheap enough for the
+`continual_benchmark_grid.py` loop. The current preferred direction remains:
+
+1. a downstream-propagation safety metric that is cheaper than SPECTRA and
+   computed from the same pass/current weights; or
+2. a weight-only consolidation mark/protection mechanism that does not distort
+   future surprise coordinates like gauge-scale sealing did.
