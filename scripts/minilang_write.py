@@ -1619,6 +1619,75 @@ def anchored_directional_update(
     return final_flat.reshape_as(anchor_update), stats
 
 
+def dice_support_consensus_update(
+    updates: list[torch.Tensor],
+    *,
+    support_threshold: float = 0.75,
+    support_temperature: float = 16.0,
+    support_strength: float = 1.0,
+    support_cap: float = 2.0,
+    support_floor: float = 0.0,
+) -> tuple[torch.Tensor, dict[str, float]]:
+    """Coordinate-level high-support consensus across diverse contexts.
+
+    DICE is intentionally stricter than the older mean/directional ensembles:
+    each update coordinate is kept only when its sign recurs across many
+    independently rendered contexts. The goal is to preserve invariants shared
+    across diverse contexts while suppressing context-local surface posture.
+    """
+
+    if not updates:
+        raise ValueError("dice_support_consensus_update requires at least one update")
+    if len(updates) == 1:
+        return updates[0], {
+            "dice_context_count": 1.0,
+            "dice_support_threshold": float(support_threshold),
+            "dice_gate_mean": 1.0,
+            "dice_high_support_fraction": 1.0,
+            "dice_mean_support": 1.0,
+            "dice_mean_update_fro": float(torch.linalg.vector_norm(updates[0]).item()),
+            "dice_final_update_fro": float(torch.linalg.vector_norm(updates[0]).item()),
+        }
+
+    stack = torch.stack([update.detach().float().cpu() for update in updates], dim=0)
+    positive = (stack > 0).float().mean(dim=0)
+    negative = (stack < 0).float().mean(dim=0)
+    support = torch.maximum(positive, negative)
+    mean_update = stack.mean(dim=0)
+    threshold = min(max(float(support_threshold), 0.0), 1.0)
+    temperature = max(float(support_temperature), 1e-6)
+    gate = torch.sigmoid((support - threshold) * temperature)
+    floor = min(max(float(support_floor), 0.0), 1.0)
+    gate = floor + (1.0 - floor) * gate
+    if support_strength != 0:
+        gain = torch.exp((support - threshold) * float(support_strength))
+        gain = gain.clamp(max=max(float(support_cap), 1.0))
+        gate = gate * gain
+    final_update = mean_update * gate
+    norms = torch.linalg.vector_norm(stack.flatten(1), dim=1)
+    stats = {
+        "dice_context_count": float(len(updates)),
+        "dice_support_threshold": threshold,
+        "dice_support_temperature": float(support_temperature),
+        "dice_support_strength": float(support_strength),
+        "dice_support_cap": float(support_cap),
+        "dice_support_floor": floor,
+        "dice_mean_support": float(support.mean().item()),
+        "dice_support_p90": float(torch.quantile(support.flatten(), 0.90).item()),
+        "dice_support_p99": float(torch.quantile(support.flatten(), 0.99).item()),
+        "dice_gate_mean": float(gate.mean().item()),
+        "dice_gate_p90": float(torch.quantile(gate.flatten(), 0.90).item()),
+        "dice_gate_p99": float(torch.quantile(gate.flatten(), 0.99).item()),
+        "dice_high_support_fraction": float((support >= threshold).float().mean().item()),
+        "dice_mean_update_fro": float(norms.mean().item()),
+        "dice_mean_update_fro_std": float(norms.std(unbiased=False).item()),
+        "dice_mean_map_fro": float(torch.linalg.vector_norm(mean_update).item()),
+        "dice_final_update_fro": float(torch.linalg.vector_norm(final_update).item()),
+    }
+    stats.update(proposal_alignment_stats([update.detach().float().cpu() for update in updates]))
+    return final_update.contiguous(), stats
+
+
 def subspace_consensus_update(
     updates: list[torch.Tensor],
     *,
@@ -2592,6 +2661,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ensemble-snr-temperature", type=float, default=4.0)
     parser.add_argument("--ensemble-directional-min-agreement", type=float, default=0.0)
     parser.add_argument("--ensemble-subspace-rank", type=int, default=2)
+    parser.add_argument("--dice-defer-apply", action="store_true")
+    parser.add_argument("--dice-support-threshold", type=float, default=0.75)
+    parser.add_argument("--dice-support-temperature", type=float, default=16.0)
+    parser.add_argument("--dice-support-strength", type=float, default=1.0)
+    parser.add_argument("--dice-support-cap", type=float, default=2.0)
+    parser.add_argument("--dice-support-floor", type=float, default=0.0)
     parser.add_argument("--lexical-channel", action="store_true")
     parser.add_argument("--lexical-channel-attention", action="store_true")
     parser.add_argument("--lexical-channel-scale", type=float, default=0.25)
@@ -3053,6 +3128,7 @@ def run_intrinsic_surprise_writes(
 ) -> None:
     layers = get_decoder_layers(model)
     generic_geometry: dict[int, tuple[torch.Tensor | None, torch.Tensor | None]] = {}
+    dice_deferred_updates: dict[int, list[torch.Tensor]] = {}
     lm_basis = lm_head_generic_basis(model, args.intrinsic_surprise_lm_head_generic_rank)
     output_penalty_basis = lm_head_generic_basis(model, args.intrinsic_surprise_output_penalty_rank)
     if (
@@ -4209,6 +4285,32 @@ def run_intrinsic_surprise_writes(
                 if selection.diagnostics is None:
                     selection.diagnostics = {}
                 selection.diagnostics.update(spectra.diagnostics)
+            if args.dice_defer_apply:
+                dice_deferred_updates.setdefault(layer_idx, []).append(update.detach().float().cpu())
+                append_jsonl(
+                    updates_path,
+                    {
+                        "lesson_idx": lesson_idx,
+                        "layer": layer_idx,
+                        "module": "mlp_down",
+                        "write_mode": "intrinsic_surprise",
+                        "ensemble_phase": "dice_proposal",
+                        "lesson_token_count": int(keys.shape[0]),
+                        "selected_rows": int(selection.keys.shape[0]),
+                        "selected_token_min": int(selection.token_indices.min().item()),
+                        "selected_token_max": int(selection.token_indices.max().item()),
+                        "row_score_mean": float(selection.row_scores.mean().item()),
+                        "row_score_max": float(selection.row_scores.max().item()),
+                        "intrinsic_target_purifier": args.intrinsic_target_purifier,
+                        "intrinsic_target_mode": args.intrinsic_surprise_target_mode,
+                        "intrinsic_relation_value_mode": args.intrinsic_surprise_relation_value_mode,
+                        "dice_defer_apply": True,
+                        "update_fro": float(torch.linalg.vector_norm(update).item()),
+                        **(selection.diagnostics or {}),
+                        **stats.__dict__,
+                    },
+                )
+                continue
             if args.memory_gate:
                 wrapper.set_gate_last_token_only_(args.memory_gate_final_token_only)
                 wrapper.set_gate_keys_(
@@ -4540,6 +4642,34 @@ def run_intrinsic_surprise_writes(
                             **readout_stats.__dict__,
                         },
                     )
+
+    if args.dice_defer_apply:
+        for layer_idx, updates in dice_deferred_updates.items():
+            if layer_idx not in wrappers or not updates:
+                continue
+            final_update, dice_stats = dice_support_consensus_update(
+                updates,
+                support_threshold=args.dice_support_threshold,
+                support_temperature=args.dice_support_temperature,
+                support_strength=args.dice_support_strength,
+                support_cap=args.dice_support_cap,
+                support_floor=args.dice_support_floor,
+            )
+            wrappers[layer_idx].add_memory_(final_update, slot_id=slot_id)
+            append_jsonl(
+                updates_path,
+                {
+                    "lesson_idx": -1,
+                    "layer": layer_idx,
+                    "module": "mlp_down",
+                    "write_mode": "intrinsic_surprise",
+                    "ensemble_phase": "dice_applied",
+                    "count": len(updates),
+                    "reduction": "dice_support_consensus",
+                    "update_fro": float(torch.linalg.vector_norm(final_update).item()),
+                    **dice_stats,
+                },
+            )
 
 
 def main() -> None:

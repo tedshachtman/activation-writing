@@ -7131,3 +7131,121 @@ Current implication:
   with a clear causal falsifier, or shift away from row/atom/output-filtering
   toward an allocation mechanism that preserves the threshold-crossing
   component without using old sidecar state.
+
+## 2026-05-22: DICE Diverse Invariant Context Ensemble
+
+User hypothesis: the earlier ensemble experiments mostly averaged multiple
+translation-lesson renderings, so the invariant across contexts was not just
+the invented language. It also included "translation lesson / answer posture."
+The stronger test is to create many intentionally different context worlds
+whose only designed common factor is the same underlying mini-language, then
+keep only update coordinates that recur across those diverse contexts.
+
+Implementation:
+
+- added `render_task_lesson_variant(...)` with 10 distinct surface frames:
+  ordinary lesson, field note, cipher memo, stage directions, recipe notes,
+  game rules, dialogue notes, map legend, correction sheet, and story caption
+  key;
+- added `--dice-diverse-contexts N` to the continual runner, replacing
+  progressive same-format lessons with `N` diverse renderings of the final
+  task lesson;
+- added `--dice-defer-apply` to collect per-context proposal updates without
+  applying them immediately;
+- added `dice_support_consensus_update(...)`, which computes coordinate-level
+  sign support across proposal updates and applies a high-support gate:
+
+  \[
+  M_\mathrm{dice}=\mathrm{mean}(M_c)\cdot
+  \sigma((\mathrm{support}-\tau)T)
+  \cdot \min(\exp(\alpha(\mathrm{support}-\tau)), c_\max).
+  \]
+
+- added fast presets:
+  - `dice_qrico_fast`: 8 diverse contexts, support threshold `.75`;
+  - `dice_qrico_strict_fast`: 12 diverse contexts, support threshold `.875`;
+  - manual 12-context sweeps at thresholds `.75`, `.80`, and boosted `.875`.
+
+Verification:
+
+```bash
+python -m py_compile scripts/minilang_write.py \
+  scripts/minilang_intrinsic_continual.py \
+  scripts/minilang_continual_triangle.py \
+  scripts/continual_benchmark_grid.py \
+  tests/test_minilang.py
+python -m pytest tests/test_minilang.py -q
+# 12 passed
+```
+
+All DICE runs used the reduced two-task fast fixture:
+
+- Qwen/Qwen3-1.7B;
+- two tasks: Lyran then Vomar;
+- 4 teacher-filtered eval questions per task from 40 candidates;
+- layers `4,8,12,16,20,24,27`;
+- `relational_aggregate`, context-value, final-aligned;
+- Q-RICO residual-filter scaffold (`deflate 4/4`, no layer trust);
+- weak protection stack `256/20` input, `256/10` output;
+- no old-key negatives or sidecar state.
+
+### Fast Diagnostic Results
+
+| Preset | Contexts | Support threshold | Gate mean | Task0 after task0 | Task1 after task1 | Sentinel c2w after task0 | Sentinel c2w after task1 | Before-correct drop after task1 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `qrico_key16_fast` | same-format | n/a | n/a | `2/4` | n/a | `3` | n/a | n/a |
+| `dice_qrico_fast` | `8` | `.75` | `0.334` | `1/4` | n/a | `2` | n/a | n/a |
+| `dice_qrico_relaxed12` | `12` | `.75` | `0.276` | `1/4` | n/a | `2` | n/a | n/a |
+| `dice_qrico_mid` | `12` | `.80` | `0.177` | `1/4` | `3/4` | `0` | `2` | `0.492` |
+| `dice_qrico_strict_fast` | `12` | `.875` | `0.076` | `1/4` | `3/4` | `0` | `0` | `0.126` |
+| `dice_qrico_boosted` | `12` | `.875` | `0.082` | `1/4` | `3/4` | `0` | `1` | `0.222` |
+
+Notes:
+
+- `dice_qrico_strict_fast` completed the reduced two-task run with zero
+  sentinel c2w after both tasks and very small before-correct drop
+  (`0.104` after task0, `0.126` after task1).
+- However, task0 did not improve over baseline: baseline `1/4`, edited `1/4`.
+- Task1 did improve: baseline `2/4`, edited `3/4`, context `4/4`.
+- Relaxing the support threshold to `.80` preserved task1 acquisition but
+  reintroduced c2w after task1.
+- Relaxing to `.75` failed at task0 with c2w `2`.
+- Boosting strict high-support coordinates increased update norm modestly but
+  reintroduced one c2w after task1 without improving task0.
+
+Interpretation:
+
+DICE is qualitatively different from TRACE/TDMI/PRISM. It can almost eliminate
+sentinel churn on the reduced two-task fixture without old-key protection or
+sidecar state, and it preserves task1 acquisition in the strict setting. The
+tradeoff is that the first task under-acquires: the high-support intersection
+appears to remove most of the threshold-crossing Lyran component along with the
+translation/posture contaminant.
+
+So the user hypothesis is partially validated:
+
+- deliberate context diversity plus high-support filtering strongly suppresses
+  unsafe broad movement;
+- more contexts make accidental commonalities less likely to survive;
+- but the linearly common coordinate across diverse worlds is still too weak
+  for reliable task0 acquisition on this fast fixture.
+
+This is not the same failure as the local safety filters. DICE is not merely
+detecting a bogus hazard coordinate; it is selecting a very small invariant
+intersection. The next DICE-specific work should avoid blunt coordinate
+intersection and instead align proposals in a semantic/key-conditioned basis:
+
+1. support over relational rows or Q-RICO residual modes rather than raw matrix
+   coordinates;
+2. anti-support contexts that share translation format but use a different
+   language, to explicitly subtract translation posture;
+3. context clusters rather than all-context unanimity, so lexical bindings that
+   appear in different surface circuits can still contribute;
+4. a final scale sweep only after a support coordinate passes task0 with zero
+   c2w.
+
+Current status:
+
+DICE is promising as a safety/consolidation idea but not yet a new frontier.
+It deserves one more targeted implementation if we can define support in a
+better coordinate system. Raw coordinate high-support is too conservative.

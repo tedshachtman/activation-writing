@@ -9,6 +9,7 @@ from scripts.minilang_write import (
     build_unique_random_questions,
     cap_row_norms,
     center_targets,
+    dice_support_consensus_update,
     intrinsic_input_penalty_keys,
     intrinsic_span_readout_selection,
     lesson_example_keys,
@@ -17,6 +18,7 @@ from scripts.minilang_write import (
     question_key,
     render_lesson,
 )
+from scripts.minilang_continual_triangle import render_task_lesson_variant, task_profile
 
 
 def base_args(**overrides):
@@ -95,6 +97,37 @@ def test_object_gate_prompts_end_on_source_sentence():
     assert len(prompts) == 2
     assert all("English:" not in prompt for prompt in prompts)
     assert all(prompt.rstrip().endswith(question.sentence) for prompt, question in zip(prompts, questions, strict=True))
+
+
+def test_dice_support_consensus_keeps_repeated_sign_coordinate():
+    updates = [
+        torch.tensor([[1.0, 1.0], [0.5, -0.5]]),
+        torch.tensor([[1.0, -1.0], [-0.5, 0.5]]),
+        torch.tensor([[1.0, 1.0], [0.5, -0.5]]),
+        torch.tensor([[1.0, -1.0], [-0.5, 0.5]]),
+    ]
+    final, stats = dice_support_consensus_update(
+        updates,
+        support_threshold=0.75,
+        support_temperature=24.0,
+        support_strength=0.0,
+    )
+    assert final[0, 0] > 0.9
+    assert abs(final[0, 1]) < 0.1
+    assert stats["dice_context_count"] == 4.0
+    assert stats["dice_high_support_fraction"] < 1.0
+
+
+def test_diverse_task_lesson_variants_change_surface_frame():
+    profile = task_profile(0)
+    variants = [
+        render_task_lesson_variant(profile, 5, 4, seed=1, variant_idx=idx)
+        for idx in range(5)
+    ]
+    assert len(set(variants)) == len(variants)
+    assert all(profile.name in text for text in variants)
+    assert any("Field note" in text for text in variants)
+    assert any("Cipher desk memo" in text for text in variants)
 
 
 def test_intrinsic_span_readout_selection_uses_lesson_span_positions():

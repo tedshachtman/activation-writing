@@ -229,6 +229,149 @@ def render_task_lesson(profile: TaskProfile, lesson_idx: int, example_count: int
     )
 
 
+def render_task_lesson_variant(
+    profile: TaskProfile,
+    lesson_idx: int,
+    example_count: int,
+    seed: int,
+    variant_idx: int,
+) -> str:
+    """Render the same language facts through deliberately different frames."""
+
+    rng = random.Random(seed + profile.idx * 100_003 + lesson_idx * 997 + variant_idx * 53_921)
+    nouns, verbs, adjectives, tenses = profile_items(profile, lesson_idx)
+    examples = [
+        make_translation_question(
+            rng,
+            nouns,
+            verbs,
+            adjectives,
+            tenses,
+            category="dice_lesson_example",
+            force_modifier=lesson_idx >= 3,
+        )
+        for _ in range(example_count)
+    ]
+    noun_lines = "; ".join(f"{word.src} means {word.en}" for word in nouns)
+    verb_lines = "; ".join(
+        f"{word.src} means {word.en}" + (f" and past is {word.past}" if word.past else "")
+        for word in verbs
+    )
+    adjective_lines = "; ".join(f"{word.src} means {word.en}" for word in adjectives) or "no modifiers yet"
+    tense_lines = "; ".join(
+        {
+            "na": "na marks present time",
+            "pa": "pa marks past time",
+            "fu": "fu marks future time",
+        }[word.src]
+        for word in tenses
+    )
+    examples_arrow = "\n".join(f"- {item.sentence} -> {item.answer}" for item in examples)
+    examples_quotes = "\n".join(f"- When the record says '{item.sentence}', the intended English is '{item.answer}'." for item in examples)
+    examples_table = "\n".join(f"{idx + 1}. source: {item.sentence}\n   result: {item.answer}" for idx, item in enumerate(examples))
+    variant = variant_idx % 10
+    if variant == 0:
+        return render_task_lesson(profile, lesson_idx, example_count, seed + variant_idx * 53_921)
+    if variant == 1:
+        return (
+            f"Field note {variant_idx + 1}: {profile.name} inscriptions.\n"
+            "The inscriptions use time first, then action, then actor, then patient. "
+            "Descriptive words follow the thing they describe.\n\n"
+            f"Time marks: {tense_lines}.\n"
+            f"Object names: {noun_lines}.\n"
+            f"Action names: {verb_lines}.\n"
+            f"Descriptors: {adjective_lines}.\n\n"
+            f"Observed inscription pairs:\n{examples_quotes}\n"
+        )
+    if variant == 2:
+        return (
+            f"Cipher desk memo for {profile.name} fragments.\n"
+            "Decode each fragment by reading the first token as tense, the second as the verb, "
+            "the third as subject, and the fourth as object. Modifiers trail their nouns.\n\n"
+            f"TENSE: {tense_lines}.\n"
+            f"NOUNS: {noun_lines}.\n"
+            f"VERBS: {verb_lines}.\n"
+            f"MODIFIERS: {adjective_lines}.\n\n"
+            f"Checked decodes:\n{examples_table}\n"
+        )
+    if variant == 3:
+        return (
+            f"Archive card: ceremonial {profile.name} stage directions.\n"
+            "A command is understood as time, motion, performer, target. English retells it as "
+            "performer, motion, target. Modifiers come after names in the source.\n\n"
+            f"Time glossary: {tense_lines}.\n"
+            f"Performer/target glossary: {noun_lines}.\n"
+            f"Motion glossary: {verb_lines}.\n"
+            f"Modifier glossary: {adjective_lines}.\n\n"
+            f"Stage-direction readings:\n{examples_arrow}\n"
+        )
+    if variant == 4:
+        return (
+            f"Recipe margin notes with {profile.name} labels.\n"
+            "The label grammar is fixed: tense marker, process word, ingredient doing the action, "
+            "ingredient receiving it. A color or quality word follows its ingredient.\n\n"
+            f"Timing labels: {tense_lines}.\n"
+            f"Ingredient labels: {noun_lines}.\n"
+            f"Process labels: {verb_lines}.\n"
+            f"Quality labels: {adjective_lines}.\n\n"
+            f"Kitchen note examples:\n{examples_quotes}\n"
+        )
+    if variant == 5:
+        return (
+            f"Game rule appendix using {profile.name} tokens.\n"
+            "For a move line, read slot 1 as when, slot 2 as action, slot 3 as the acting piece, "
+            "and slot 4 as the affected piece. Adjectives are suffix-like and follow the piece.\n\n"
+            f"When tokens: {tense_lines}.\n"
+            f"Piece tokens: {noun_lines}.\n"
+            f"Action tokens: {verb_lines}.\n"
+            f"Piece tags: {adjective_lines}.\n\n"
+            f"Move log examples:\n{examples_table}\n"
+        )
+    if variant == 6:
+        return (
+            f"Dialogue analyst note for {profile.name} utterances.\n"
+            "Speakers put time before the event word. The next name is the doer; the next name is "
+            "what receives the event. Qualities are spoken after names.\n\n"
+            f"Time words: {tense_lines}.\n"
+            f"Names: {noun_lines}.\n"
+            f"Event words: {verb_lines}.\n"
+            f"Qualities: {adjective_lines}.\n\n"
+            f"Transcript glosses:\n{examples_quotes}\n"
+        )
+    if variant == 7:
+        return (
+            f"Map legend written in {profile.name} shorthand.\n"
+            "Legend entries use the order: era marker, route word, starting marker, ending marker. "
+            "A descriptor follows the marker it modifies.\n\n"
+            f"Era markers: {tense_lines}.\n"
+            f"Location markers: {noun_lines}.\n"
+            f"Route words: {verb_lines}.\n"
+            f"Descriptors: {adjective_lines}.\n\n"
+            f"Legend examples:\n{examples_arrow}\n"
+        )
+    if variant == 8:
+        return (
+            f"Error-correction sheet for {profile.name} machine notes.\n"
+            "The machine note is parsed as temporal marker, operation, source entity, destination "
+            "entity. Attribute markers trail entities.\n\n"
+            f"Temporal markers: {tense_lines}.\n"
+            f"Entity markers: {noun_lines}.\n"
+            f"Operation markers: {verb_lines}.\n"
+            f"Attribute markers: {adjective_lines}.\n\n"
+            f"Corrections:\n{examples_table}\n"
+        )
+    return (
+        f"Children's story key for {profile.name} captions.\n"
+        "Every caption begins with when it happens, then what happens, then who does it, then who "
+        "or what it happens to. Describing words follow the named thing.\n\n"
+        f"When words: {tense_lines}.\n"
+        f"Character words: {noun_lines}.\n"
+        f"Happening words: {verb_lines}.\n"
+        f"Describing words: {adjective_lines}.\n\n"
+        f"Caption key:\n{examples_quotes}\n"
+    )
+
+
 def build_task_questions(
     profile: TaskProfile,
     count: int,

@@ -27,6 +27,7 @@ from scripts.minilang_continual_triangle import (
     evaluate_task_mc,
     release_device_cache,
     render_task_lesson,
+    render_task_lesson_variant,
     task_profile,
 )
 from scripts.minilang_write import (
@@ -52,6 +53,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tasks", type=int, default=3)
     parser.add_argument("--lessons-per-task", type=int, default=6)
     parser.add_argument("--lesson-examples", type=int, default=8)
+    parser.add_argument(
+        "--dice-diverse-contexts",
+        type=int,
+        default=0,
+        help="Replace progressive same-format lessons with this many diverse renderings of the final task lesson.",
+    )
     parser.add_argument("--eval-questions", type=int, default=8)
     parser.add_argument("--teacher-filter-eval", action="store_true")
     parser.add_argument("--teacher-filter-candidates", type=int, default=120)
@@ -160,6 +167,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--intrinsic-surprise-birth-trigger-scale", type=float, default=4.0)
     parser.add_argument("--intrinsic-surprise-birth-trigger-ridge", type=float, default=1e-3)
     parser.add_argument("--write-only-final", action="store_true")
+    parser.add_argument("--dice-defer-apply", action="store_true")
+    parser.add_argument("--dice-support-threshold", type=float, default=0.75)
+    parser.add_argument("--dice-support-temperature", type=float, default=16.0)
+    parser.add_argument("--dice-support-strength", type=float, default=1.0)
+    parser.add_argument("--dice-support-cap", type=float, default=2.0)
+    parser.add_argument("--dice-support-floor", type=float, default=0.0)
     parser.add_argument("--memory-gate", action="store_true")
     parser.add_argument("--memory-gate-final-token-only", action="store_true")
     parser.add_argument("--memory-gate-threshold", type=float, default=0.95)
@@ -368,14 +381,35 @@ def main() -> None:
     eval_sets = []
     filter_stats: list[dict] = []
     for profile in profiles:
-        task_lessons = [
-            render_task_lesson(profile, lesson_idx, args.lesson_examples, args.seed)
-            for lesson_idx in range(args.lessons_per_task)
-        ]
+        if args.dice_diverse_contexts > 0:
+            task_lessons = [
+                render_task_lesson_variant(
+                    profile,
+                    final_lesson_idx,
+                    args.lesson_examples,
+                    args.seed,
+                    variant_idx,
+                )
+                for variant_idx in range(args.dice_diverse_contexts)
+            ]
+        else:
+            task_lessons = [
+                render_task_lesson(profile, lesson_idx, args.lesson_examples, args.seed)
+                for lesson_idx in range(args.lessons_per_task)
+            ]
         lesson_texts.append(task_lessons)
         contexts.append("\n\n".join(task_lessons))
         for idx, text in enumerate(task_lessons):
-            append_jsonl(lessons_path, {"task_idx": profile.idx, "language": profile.name, "lesson_idx": idx, "text": text})
+            append_jsonl(
+                lessons_path,
+                {
+                    "task_idx": profile.idx,
+                    "language": profile.name,
+                    "lesson_idx": idx,
+                    "render_mode": "dice_diverse" if args.dice_diverse_contexts > 0 else "standard",
+                    "text": text,
+                },
+            )
         candidate_count = args.teacher_filter_candidates if args.teacher_filter_eval else args.eval_questions
         eval_sets.append(
             build_task_questions(

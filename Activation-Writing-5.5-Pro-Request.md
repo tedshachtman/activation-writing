@@ -1,4 +1,4 @@
-# Request For GPT-5.5 Pro: One-Pass Surprise Consolidation After TDMI-Q Fast Falsifier
+# Request For GPT-5.5 Pro: One-Pass Surprise Consolidation After DICE Fast Sweep
 
 Date: 2026-05-22
 
@@ -9,11 +9,119 @@ Audience: GPT-5.5 Pro. I am giving you two files:
 2. This file: the current prompt/request. Please read the full research log
    first, then answer this prompt.
 
+## 2026-05-22 Update: DICE Diverse Invariant Context Ensemble
+
+Please treat this update as the current live state. The TDMI-Q, TRACE-Q,
+PRISM-Q, and SEAL-Q sections below are retained for continuity, and the full
+research log is attached separately.
+
+User hypothesis: previous ensemble attempts mostly combined multiple
+translation-lesson renderings, so their shared direction still included
+translation-answer posture. A stronger test is to create many deliberately
+different context worlds whose only designed common factor is the same
+mini-language, then keep only update coordinates that recur across those
+contexts.
+
+Implementation added:
+
+- `render_task_lesson_variant(...)` with 10 distinct surface frames: ordinary
+  lesson, field note, cipher memo, stage directions, recipe notes, game rules,
+  dialogue notes, map legend, correction sheet, and story caption key;
+- `--dice-diverse-contexts N`, replacing progressive same-format lessons with
+  `N` diverse renderings of the final task lesson;
+- `--dice-defer-apply`, which collects per-context proposal updates without
+  applying them immediately;
+- `dice_support_consensus_update(...)`, a coordinate-level sign-support
+  ensemble:
+
+```text
+M_dice = mean(M_c)
+       * sigmoid((support - threshold) * temperature)
+       * min(exp(strength * (support - threshold)), cap)
+```
+
+Fast fixture:
+
+- Qwen/Qwen3-1.7B;
+- two tasks: Lyran then Vomar;
+- 4 teacher-filtered eval questions per task from 40 candidates;
+- layers `4,8,12,16,20,24,27`;
+- `relational_aggregate`, context-value, final-aligned;
+- Q-RICO residual-filter scaffold (`deflate 4/4`, no layer trust);
+- weak protection stack `256/20` input, `256/10` output;
+- no old-key negatives or sidecar state.
+
+Fast results:
+
+| Preset | Contexts | Support threshold | Gate mean | Task0 after task0 | Task1 after task1 | Sentinel c2w after task0 | Sentinel c2w after task1 | Drop after task1 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `qrico_key16_fast` | same-format | n/a | n/a | `2/4` | n/a | `3` | n/a | n/a |
+| `dice_qrico_fast` | `8` | `.75` | `0.334` | `1/4` | n/a | `2` | n/a | n/a |
+| `dice_qrico_relaxed12` | `12` | `.75` | `0.276` | `1/4` | n/a | `2` | n/a | n/a |
+| `dice_qrico_mid` | `12` | `.80` | `0.177` | `1/4` | `3/4` | `0` | `2` | `0.492` |
+| `dice_qrico_strict_fast` | `12` | `.875` | `0.076` | `1/4` | `3/4` | `0` | `0` | `0.126` |
+| `dice_qrico_boosted` | `12` | `.875` | `0.082` | `1/4` | `3/4` | `0` | `1` | `0.222` |
+
+Interpretation:
+
+DICE is qualitatively different from the local hazard filters. Strict
+high-support consensus nearly eliminates sentinel churn on the reduced
+two-task fixture without old-key protection or sidecar state. However, it
+under-acquires task0: baseline `1/4`, edited `1/4`. It does preserve a small
+task1 gain: baseline `2/4`, edited `3/4`. Relaxing or boosting the gate
+reintroduces c2w before it fixes task0.
+
+The user hypothesis is partially validated:
+
+- deliberate context diversity plus high-support filtering strongly suppresses
+  unsafe broad movement;
+- more contexts make nuisance coincidences less likely to survive;
+- raw coordinate-level intersection is too conservative and loses much of the
+  threshold-crossing language signal.
+
+### Current Live State
+
+Q-RICO/key16 remains the full single-task safe frontier, but DICE is the first
+recent branch to make the reduced two-task sentinel behavior look clean without
+old-task sidecar protection. It is not a new accuracy frontier because task0
+does not acquire.
+
+The next DICE-specific question is whether support should be computed in a
+semantic/key-conditioned coordinate rather than raw matrix coordinates:
+
+1. support over relational rows, Q-RICO residual modes, or key-target maplets;
+2. anti-support contexts that share translation format but use a different
+   language, to subtract translation posture explicitly;
+3. cluster support rather than all-context unanimity, so lexical bindings that
+   route through different surface circuits can still contribute;
+4. a final scale/gain sweep only after a coordinate passes task0 with zero c2w.
+
+### New Ask
+
+Please propose the next implementable mathematical tool.
+
+It must be specific enough to implement: tensors, objectives, closed-form solve,
+required diagnostics, first runs, ablations, and falsification criteria.
+
+Please address:
+
+1. DICE raw coordinate support gives strong safety but weak task0 acquisition.
+   What coordinate should support be computed in instead?
+2. How should anti-support be constructed without violating the one-pass,
+   no-probes/no-sidecar spirit? For example, can same-write rival-language or
+   same-format contexts be used as contrastive construction data?
+3. Should the next DICE version combine strict invariant support with Q-RICO’s
+   known safe single-task scaffold, or should it operate on the higher-acquiring
+   raw relational residual?
+4. Is the task1-only gain in strict DICE likely real signal, task asymmetry, or
+   just fast-fixture variance? What diagnostic would separate those?
+5. What is the fastest diagnostic ladder before promoting any DICE variant to
+   the full two-task benchmark?
+
 ## 2026-05-22 Update: TDMI-Q Hidden-Manifold Row Weighting Failed Fast Gate
 
-Please treat this update as the current live state. The older TRACE-Q, PRISM-Q,
-and SEAL-Q sections below are retained for continuity, and the full research
-log is attached separately.
+This older section is retained for continuity. The DICE section above is the
+current live state.
 
 Your latest TDMI-Q direction was implemented in a cheap first-pass form and
 tested on the reduced two-task + expanded-sentinel fast gate. It did **not**
