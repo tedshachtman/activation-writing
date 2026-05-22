@@ -160,6 +160,7 @@ def parse_args() -> argparse.Namespace:
             "sharp_karp",
             "orca_karp",
             "qrico",
+            "prism_q",
             "spectra",
             "seal_qrico",
             "ocep_residual",
@@ -226,6 +227,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--qrico-layer-evidence-min", type=float, default=0.03)
     parser.add_argument("--qrico-layer-evidence-target", type=float, default=0.20)
     parser.add_argument("--qrico-disable-layer-trust", action="store_true")
+    parser.add_argument("--prism-horizon", type=int, default=4)
+    parser.add_argument("--prism-signal-rank", type=int, default=16)
+    parser.add_argument("--prism-hazard-rank", type=int, default=16)
+    parser.add_argument("--prism-option-top-k", type=int, default=8)
+    parser.add_argument("--prism-generic-key-rank", type=int, default=128)
+    parser.add_argument("--prism-low-surprise-rows", type=int, default=64)
+    parser.add_argument("--prism-budget", type=float, default=0.25)
+    parser.add_argument("--prism-correction-cap", type=float, default=0.35)
+    parser.add_argument("--prism-signal-retention-min", type=float, default=0.90)
+    parser.add_argument("--prism-no-residualize-hazard", action="store_true")
+    parser.add_argument("--prism-disable-future", action="store_true")
+    parser.add_argument(
+        "--prism-ablation",
+        choices=[
+            "none",
+            "no_residualize",
+            "local_only",
+            "shuffled_signal",
+            "correction_only",
+            "removed_hazard_only",
+            "no_hazard",
+        ],
+        default="none",
+    )
     parser.add_argument("--seal-eta-erase", type=float, default=2.0)
     parser.add_argument("--seal-eta-seal", type=float, default=0.05)
     parser.add_argument("--seal-max-scale", type=float, default=1.10)

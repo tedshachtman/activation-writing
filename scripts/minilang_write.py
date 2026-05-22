@@ -31,6 +31,7 @@ from caic.intrinsic_surprise import (
     orca_karp_purify_update,
     ocep_purify_update,
     ocep_qrico_purify_update,
+    prism_q_purify_update,
     project_rows_away_from_basis,
     qrico_purify_update,
     seal_qrico_purify_update,
@@ -2374,6 +2375,7 @@ def parse_args() -> argparse.Namespace:
             "sharp_karp",
             "orca_karp",
             "qrico",
+            "prism_q",
             "spectra",
             "seal_qrico",
             "ocep_residual",
@@ -2440,6 +2442,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--qrico-layer-evidence-min", type=float, default=0.03)
     parser.add_argument("--qrico-layer-evidence-target", type=float, default=0.20)
     parser.add_argument("--qrico-disable-layer-trust", action="store_true")
+    parser.add_argument("--prism-horizon", type=int, default=4)
+    parser.add_argument("--prism-signal-rank", type=int, default=16)
+    parser.add_argument("--prism-hazard-rank", type=int, default=16)
+    parser.add_argument("--prism-option-top-k", type=int, default=8)
+    parser.add_argument("--prism-generic-key-rank", type=int, default=128)
+    parser.add_argument("--prism-low-surprise-rows", type=int, default=64)
+    parser.add_argument("--prism-budget", type=float, default=0.25)
+    parser.add_argument("--prism-correction-cap", type=float, default=0.35)
+    parser.add_argument("--prism-signal-retention-min", type=float, default=0.90)
+    parser.add_argument("--prism-no-residualize-hazard", action="store_true")
+    parser.add_argument("--prism-disable-future", action="store_true")
+    parser.add_argument(
+        "--prism-ablation",
+        choices=[
+            "none",
+            "no_residualize",
+            "local_only",
+            "shuffled_signal",
+            "correction_only",
+            "removed_hazard_only",
+            "no_hazard",
+        ],
+        default="none",
+    )
     parser.add_argument("--seal-eta-erase", type=float, default=2.0)
     parser.add_argument("--seal-eta-seal", type=float, default=0.05)
     parser.add_argument("--seal-max-scale", type=float, default=1.10)
@@ -3078,6 +3104,7 @@ def run_intrinsic_surprise_writes(
             "sharp_karp",
             "orca_karp",
             "qrico",
+            "prism_q",
             "spectra",
             "seal_qrico",
             "ocep_residual",
@@ -3088,6 +3115,8 @@ def run_intrinsic_surprise_writes(
                 if args.intrinsic_target_purifier == "sharp_karp"
                 else int(args.qrico_option_sketch_rank)
                 if args.intrinsic_target_purifier in {"qrico", "seal_qrico"}
+                else int(args.prism_option_top_k)
+                if args.intrinsic_target_purifier == "prism_q"
                 else int(args.spectra_option_top_k)
                 if args.intrinsic_target_purifier == "spectra"
                 else max(2, int(args.ocep_option_local_rank) * 2)
@@ -3685,6 +3714,55 @@ def run_intrinsic_surprise_writes(
                 if selection.diagnostics is None:
                     selection.diagnostics = {}
                 selection.diagnostics.update(qrico.diagnostics)
+            elif args.intrinsic_target_purifier == "prism_q":
+                future_outputs_by_layer = {
+                    future_idx: future_capture.outputs[: usable_keys.shape[0]]
+                    for future_idx, future_capture in captures.items()
+                    if future_capture.outputs.shape[0] >= usable_keys.shape[0]
+                }
+                prism = prism_q_purify_update(
+                    update,
+                    keys=selection.keys,
+                    targets=targets,
+                    weights=positive_weights,
+                    all_keys=usable_keys,
+                    all_outputs=captures[layer_idx].outputs[: usable_keys.shape[0]],
+                    token_indices=selection.token_indices,
+                    logit_top_values=sharp_top_values,
+                    logit_top_indices=sharp_top_indices,
+                    lm_head_indices=sharp_lm_indices,
+                    lm_head_rows=sharp_lm_rows,
+                    layer_idx=layer_idx,
+                    layer=layer,
+                    future_outputs_by_layer=future_outputs_by_layer,
+                    negative_keys=negative_keys,
+                    output_basis=karp_output_basis,
+                    horizon=args.prism_horizon,
+                    signal_rank=args.prism_signal_rank,
+                    hazard_rank=args.prism_hazard_rank,
+                    option_top_k=args.prism_option_top_k,
+                    generic_key_rank=args.prism_generic_key_rank,
+                    low_surprise_rows=args.prism_low_surprise_rows,
+                    budget=args.prism_budget,
+                    correction_cap=args.prism_correction_cap,
+                    signal_retention_min=args.prism_signal_retention_min,
+                    low_surprise_quantile=args.karp_low_surprise_quantile,
+                    residualize_hazard=not args.prism_no_residualize_hazard,
+                    use_future_outputs=not args.prism_disable_future,
+                    ablation_mode=args.prism_ablation,
+                    ridge=args.qrico_cca_ridge,
+                    risk_ratio_cap=args.karp_risk_ratio_cap,
+                )
+                update = prism.update
+                fit = selection.keys.detach().float() @ update.T
+                stats.fit_rmse = float(torch.sqrt(torch.mean((fit - targets.detach().float()).square())).item())
+                stats.update_fro = float(torch.linalg.vector_norm(update).item())
+                if negative_keys is not None and negative_keys.numel() > 0:
+                    neg_fit = negative_keys.detach().float() @ update.T
+                    stats.negative_rmse = float(torch.sqrt(torch.mean(neg_fit.square())).item())
+                if selection.diagnostics is None:
+                    selection.diagnostics = {}
+                selection.diagnostics.update(prism.diagnostics)
             elif args.intrinsic_target_purifier == "ocep_residual":
                 up_module = getattr(getattr(layer, "mlp", None), "up_proj", None)
                 if up_module is None:
@@ -3987,6 +4065,18 @@ def run_intrinsic_surprise_writes(
                     "qrico_layer_evidence_min": args.qrico_layer_evidence_min,
                     "qrico_layer_evidence_target": args.qrico_layer_evidence_target,
                     "qrico_disable_layer_trust": bool(args.qrico_disable_layer_trust),
+                    "prism_horizon": args.prism_horizon,
+                    "prism_signal_rank": args.prism_signal_rank,
+                    "prism_hazard_rank": args.prism_hazard_rank,
+                    "prism_option_top_k": args.prism_option_top_k,
+                    "prism_generic_key_rank": args.prism_generic_key_rank,
+                    "prism_low_surprise_rows": args.prism_low_surprise_rows,
+                    "prism_budget": args.prism_budget,
+                    "prism_correction_cap": args.prism_correction_cap,
+                    "prism_signal_retention_min": args.prism_signal_retention_min,
+                    "prism_no_residualize_hazard": bool(args.prism_no_residualize_hazard),
+                    "prism_disable_future": bool(args.prism_disable_future),
+                    "prism_ablation": args.prism_ablation,
                     "seal_eta_erase": args.seal_eta_erase,
                     "seal_eta_seal": args.seal_eta_seal,
                     "seal_max_scale": args.seal_max_scale,

@@ -16,6 +16,7 @@ from caic.intrinsic_surprise import (
     orca_karp_purify_update,
     ocep_project_update,
     ocep_purify_update,
+    prism_q_purify_update,
     qrico_purify_update,
     select_intrinsic_associative_binding_write,
     select_intrinsic_compatibility_residual_write,
@@ -1233,6 +1234,81 @@ def test_spectra_preserves_tail_more_than_hazard():
     assert useful_ratio > hazard_ratio
     assert result.diagnostics["spectra_tail_mass_retention"] > 0.5
     assert result.diagnostics["spectra_hazard_constraints"] >= 1
+
+
+def test_prism_q_clips_generic_hazard_preserving_signal():
+    update = torch.zeros(3, 4)
+    update[0, 2] = 2.0
+    update[1, 0] = 3.0
+    keys = torch.tensor(
+        [
+            [0.0, 0.0, 4.0, 0.0],
+            [0.0, 0.0, 5.0, 0.0],
+            [0.0, 0.0, 6.0, 0.0],
+        ]
+    )
+    targets = torch.tensor(
+        [
+            [8.0, 0.0, 0.0],
+            [10.0, 0.0, 0.0],
+            [12.0, 0.0, 0.0],
+        ]
+    )
+    low_keys = torch.tensor(
+        [
+            [3.0, 0.0, 0.0, 0.0],
+            [4.0, 0.0, 0.0, 0.0],
+            [5.0, 0.0, 0.0, 0.0],
+        ]
+    )
+    all_keys = torch.cat([keys, low_keys], dim=0)
+    all_outputs = torch.zeros(all_keys.shape[0], 3)
+    logit_top_indices = torch.tensor([[0, 1, 2]] * all_keys.shape[0])
+    logit_top_values = torch.tensor([[3.0, 2.0, 1.0]] * all_keys.shape[0])
+    lm_head_indices = torch.tensor([0, 1, 2])
+    lm_head_rows = torch.tensor(
+        [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0],
+        ]
+    )
+
+    result = prism_q_purify_update(
+        update,
+        keys=keys,
+        targets=targets,
+        weights=torch.ones(keys.shape[0]),
+        all_keys=all_keys,
+        all_outputs=all_outputs,
+        token_indices=torch.tensor([0, 1, 2]),
+        logit_top_values=logit_top_values,
+        logit_top_indices=logit_top_indices,
+        lm_head_indices=lm_head_indices,
+        lm_head_rows=lm_head_rows,
+        layer_idx=0,
+        future_outputs_by_layer={},
+        negative_keys=low_keys,
+        output_basis=torch.eye(3)[:2],
+        horizon=0,
+        signal_rank=1,
+        hazard_rank=1,
+        option_top_k=3,
+        generic_key_rank=1,
+        low_surprise_rows=3,
+        budget=0.05,
+        correction_cap=1.0,
+        signal_retention_min=0.95,
+        use_future_outputs=False,
+    )
+
+    purified = result.update
+    useful_ratio = abs(float(purified[0, 2].item())) / abs(float(update[0, 2].item()))
+    hazard_ratio = abs(float(purified[1, 0].item())) / abs(float(update[1, 0].item()))
+    assert useful_ratio > 0.95
+    assert useful_ratio > hazard_ratio
+    assert result.diagnostics["prism_hazard_spectral_after"] < result.diagnostics["prism_hazard_spectral_before"]
+    assert result.diagnostics["prism_signal_retention"] >= 0.95
 
 
 def test_feature_birth_creates_closed_form_trigger_on_low_impact_neuron():

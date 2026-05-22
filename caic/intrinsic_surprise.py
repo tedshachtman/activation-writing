@@ -127,6 +127,23 @@ class SealQricoResult:
 
 
 @dataclass
+class PrismPurificationResult:
+    """PRISM-Q-purified update plus diagnostics.
+
+    ``update`` is row-major MLP down delta, shaped ``[d_model, d_ff]``.
+    PRISM-Q keeps the high-rank relational/context-value candidate and clips
+    generic-key -> propagated option-hazard functionals outside the same-pass
+    innovation cone.
+    """
+
+    update: torch.Tensor
+    signal_basis: torch.Tensor
+    hazard_basis: torch.Tensor
+    generic_basis: torch.Tensor
+    diagnostics: dict[str, float]
+
+
+@dataclass
 class OcepPurificationResult:
     """OCEP-purified update plus diagnostics.
 
@@ -3236,6 +3253,316 @@ def spectra_purify_update(
         update=purified.contiguous(),
         residual_update=residual_update.contiguous(),
         projected_update=projected_update.contiguous(),
+        diagnostics=diagnostics,
+    )
+
+
+def prism_q_purify_update(
+    update: torch.Tensor,
+    *,
+    keys: torch.Tensor,
+    targets: torch.Tensor,
+    weights: torch.Tensor,
+    all_keys: torch.Tensor,
+    all_outputs: torch.Tensor,
+    token_indices: torch.Tensor,
+    logit_top_values: torch.Tensor,
+    logit_top_indices: torch.Tensor,
+    lm_head_indices: torch.Tensor,
+    lm_head_rows: torch.Tensor,
+    layer_idx: int,
+    layer: nn.Module | None = None,
+    future_outputs_by_layer: dict[int, torch.Tensor] | None = None,
+    negative_keys: torch.Tensor | None = None,
+    output_basis: torch.Tensor | None = None,
+    horizon: int = 4,
+    signal_rank: int = 16,
+    hazard_rank: int = 16,
+    option_top_k: int = 8,
+    generic_key_rank: int = 128,
+    low_surprise_rows: int = 64,
+    budget: float = 0.25,
+    correction_cap: float = 0.35,
+    signal_retention_min: float = 0.90,
+    low_surprise_quantile: float = 0.35,
+    residualize_hazard: bool = True,
+    use_future_outputs: bool = True,
+    ablation_mode: str = "none",
+    ridge: float = 1e-3,
+    eps: float = 1e-6,
+    risk_ratio_cap: float = 100.0,
+) -> PrismPurificationResult:
+    """PRISM-Q propagated residual innovation-safety purifier.
+
+    This first implementation uses the available single-pass layer captures as
+    a cheap frozen-tangent proxy: downstream same-token/high-surprise MLP output
+    rows augment the innovation cone, while local logit contrast rows and
+    output-protection rows form the hazard cone. The hazard cone is quotiented
+    by the innovation cone before clipping generic-key -> hazard singular modes.
+    """
+
+    update_f = torch.nan_to_num(update.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    k = torch.nan_to_num(keys.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    y = torch.nan_to_num(targets.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    w = torch.nan_to_num(weights.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+    all_k = torch.nan_to_num(all_keys.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    all_y = torch.nan_to_num(all_outputs.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    tok = token_indices.detach().cpu().long()
+    top_vals = torch.nan_to_num(logit_top_values.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    top_idx = logit_top_indices.detach().cpu().long()
+    lm_idx = lm_head_indices.detach().cpu().long()
+    lm_rows = torch.nan_to_num(lm_head_rows.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+
+    if update_f.ndim != 2:
+        raise ValueError(f"update must be [d,m], got {tuple(update_f.shape)}")
+    d_model, d_ff = update_f.shape
+    if k.ndim != 2 or k.shape[1] != d_ff or y.ndim != 2 or y.shape[1] != d_model or k.shape[0] != y.shape[0]:
+        raise ValueError("PRISM-Q keys/targets do not match update shape")
+    if w.ndim != 1 or w.shape[0] != k.shape[0]:
+        raise ValueError(f"PRISM-Q weights must be [{k.shape[0]}], got {tuple(w.shape)}")
+    if all_k.ndim != 2 or all_k.shape[1] != d_ff or all_y.ndim != 2 or all_y.shape[1] != d_model:
+        raise ValueError("PRISM-Q all_keys/all_outputs do not match update shape")
+    if tok.numel() != k.shape[0]:
+        raise ValueError("token_indices must align with selected rows")
+    if top_vals.ndim != 2 or top_idx.ndim != 2 or top_vals.shape != top_idx.shape:
+        raise ValueError("logit_top_values/logit_top_indices must be matching [T,k]")
+
+    def cap_rows(rows: torch.Tensor, max_rows: int) -> torch.Tensor:
+        if rows.shape[0] <= max_rows or max_rows <= 0:
+            return rows
+        idx = torch.linspace(0, rows.shape[0] - 1, steps=max_rows).round().long().unique()
+        return rows[idx]
+
+    diagnostics: dict[str, float] = {
+        "prism_enabled": 1.0,
+        "prism_update_fro_before": float(torch.linalg.vector_norm(update_f).item()),
+    }
+    if k.shape[0] == 0 or float(torch.linalg.vector_norm(update_f).item()) <= 1e-12:
+        diagnostics["prism_fallback"] = 1.0
+        return PrismPurificationResult(
+            update=update_f.contiguous(),
+            signal_basis=torch.empty(0, d_model),
+            hazard_basis=torch.empty(0, d_model),
+            generic_basis=torch.empty(0, d_ff),
+            diagnostics=diagnostics,
+        )
+
+    update_m = update_f.T.contiguous()  # [m,d]
+    w_norm = w / w.mean().clamp_min(1e-12)
+    effect = torch.nan_to_num(k @ update_m, nan=0.0, posinf=0.0, neginf=0.0)
+
+    row_scores = _token_row_surprise(all_k, layer)
+    q = min(max(float(low_surprise_quantile), 0.0), 1.0)
+    threshold = torch.quantile(row_scores, q)
+    low_mask = row_scores <= threshold
+    if int(low_mask.sum().item()) < 2:
+        low_mask = row_scores <= row_scores.median()
+    low_keys = all_k[low_mask]
+    if int(low_surprise_rows) > 0:
+        low_keys = cap_rows(low_keys, int(low_surprise_rows))
+
+    generic_parts: list[torch.Tensor | None] = [low_keys]
+    if negative_keys is not None and negative_keys.numel() > 0:
+        neg = negative_keys.detach().float().cpu()
+        if neg.ndim == 2 and neg.shape[1] == d_ff:
+            generic_parts.append(cap_rows(neg, max(int(low_surprise_rows), int(generic_key_rank))))
+    generic_basis = _fast_basis_with_rows(
+        torch.cat([part for part in generic_parts if part is not None and part.numel() > 0], dim=0),
+        max(1, int(generic_key_rank)),
+        d_ff,
+    )
+
+    signal_parts: list[torch.Tensor | None] = [y, effect]
+    if use_future_outputs and ablation_mode != "local_only" and future_outputs_by_layer:
+        selected_tokens = tok.clamp(min=0, max=max(all_y.shape[0] - 1, 0))
+        for future_idx in sorted(future_outputs_by_layer):
+            if future_idx < layer_idx or future_idx > layer_idx + max(0, int(horizon)):
+                continue
+            future = torch.nan_to_num(
+                future_outputs_by_layer[future_idx].detach().float().cpu(),
+                nan=0.0,
+                posinf=0.0,
+                neginf=0.0,
+            )
+            if future.ndim != 2 or future.shape[1] != d_model or future.shape[0] == 0:
+                continue
+            clipped = selected_tokens.clamp(max=future.shape[0] - 1)
+            signal_parts.append(future[clipped])
+            keep = min(max(1, int(signal_rank)), future.shape[0])
+            norms = torch.linalg.vector_norm(future, dim=1)
+            signal_parts.append(future[torch.topk(norms, k=keep, largest=True).indices])
+    signal_rows = torch.cat([part for part in signal_parts if part is not None and part.numel() > 0], dim=0)
+    if ablation_mode == "shuffled_signal" and signal_rows.shape[0] > 1:
+        signal_rows = torch.roll(signal_rows, shifts=1, dims=0)
+    signal_basis = _fast_basis_with_rows(signal_rows, max(1, int(signal_rank)), d_model)
+
+    usable_top_k = max(2, min(int(option_top_k), top_idx.shape[1]))
+    hazard_parts: list[torch.Tensor | None] = []
+    if top_idx.shape[0] > 0 and usable_top_k > 0:
+        low_token_idx = torch.nonzero(low_mask, as_tuple=False).flatten()
+        if low_token_idx.numel() == 0:
+            low_token_idx = torch.arange(min(all_k.shape[0], top_idx.shape[0]))
+        low_token_idx = cap_rows(low_token_idx.unsqueeze(1).float(), max(int(low_surprise_rows), 1)).flatten().long()
+        low_token_idx = low_token_idx.clamp(min=0, max=top_idx.shape[0] - 1)
+        low_top = top_idx[low_token_idx, :usable_top_k]
+        low_vals = top_vals[low_token_idx, :usable_top_k]
+        low_rows = _lookup_weight_rows(low_top, stored_indices=lm_idx, stored_rows=lm_rows)
+        low_probs = torch.softmax(low_vals, dim=1)
+        low_expected = (low_probs.unsqueeze(-1) * low_rows).sum(dim=1, keepdim=True)
+        hazard_parts.append((low_rows - low_expected).reshape(-1, d_model))
+        selected_tokens = tok.clamp(min=0, max=top_idx.shape[0] - 1)
+        selected_top = top_idx[selected_tokens, :usable_top_k]
+        selected_vals = top_vals[selected_tokens, :usable_top_k]
+        selected_rows = _lookup_weight_rows(selected_top, stored_indices=lm_idx, stored_rows=lm_rows)
+        selected_probs = torch.softmax(selected_vals, dim=1)
+        selected_expected = (selected_probs.unsqueeze(-1) * selected_rows).sum(dim=1, keepdim=True)
+        hazard_parts.append((selected_rows - selected_expected).reshape(-1, d_model))
+    if output_basis is not None and output_basis.numel() > 0:
+        out = output_basis.detach().float().cpu()
+        if out.ndim == 1:
+            out = out.unsqueeze(0)
+        if out.ndim == 2 and out.shape[1] == d_model:
+            hazard_parts.append(cap_rows(out, max(int(hazard_rank) * 4, int(hazard_rank))))
+    if use_future_outputs and ablation_mode != "local_only" and future_outputs_by_layer:
+        for future_idx in sorted(future_outputs_by_layer):
+            if future_idx < layer_idx or future_idx > layer_idx + max(0, int(horizon)):
+                continue
+            future = torch.nan_to_num(
+                future_outputs_by_layer[future_idx].detach().float().cpu(),
+                nan=0.0,
+                posinf=0.0,
+                neginf=0.0,
+            )
+            if future.ndim == 2 and future.shape[1] == d_model and future.shape[0] > 1:
+                hazard_parts.append(cap_rows(future, max(1, int(hazard_rank))))
+    raw_hazard = _fast_basis_with_rows(
+        torch.cat([part for part in hazard_parts if part is not None and part.numel() > 0], dim=0),
+        max(1, int(hazard_rank) * 2),
+        d_model,
+    )
+    if residualize_hazard and ablation_mode != "no_residualize" and signal_basis.numel() > 0 and raw_hazard.numel() > 0:
+        hazard_rows = raw_hazard - (raw_hazard @ signal_basis.T) @ signal_basis
+    else:
+        hazard_rows = raw_hazard
+    hazard_basis = _fast_basis_with_rows(hazard_rows, max(1, int(hazard_rank)), d_model)
+
+    if generic_basis.numel() == 0 or hazard_basis.numel() == 0 or signal_basis.numel() == 0:
+        diagnostics["prism_fallback"] = 1.0
+        return PrismPurificationResult(
+            update=update_f.contiguous(),
+            signal_basis=signal_basis.contiguous(),
+            hazard_basis=hazard_basis.contiguous(),
+            generic_basis=generic_basis.contiguous(),
+            diagnostics=diagnostics,
+        )
+
+    hazard_before_matrix = torch.nan_to_num(generic_basis @ update_m @ hazard_basis.T, nan=0.0, posinf=0.0, neginf=0.0)
+    try:
+        u_h, s_h, vh_h = torch.linalg.svd(hazard_before_matrix, full_matrices=False)
+    except RuntimeError:
+        u_h = torch.empty(hazard_before_matrix.shape[0], 0)
+        s_h = torch.empty(0)
+        vh_h = torch.empty(0, hazard_before_matrix.shape[1])
+    if s_h.numel() == 0:
+        diagnostics["prism_fallback"] = 1.0
+        return PrismPurificationResult(
+            update=update_f.contiguous(),
+            signal_basis=signal_basis.contiguous(),
+            hazard_basis=hazard_basis.contiguous(),
+            generic_basis=generic_basis.contiguous(),
+            diagnostics=diagnostics,
+        )
+    signal_before_matrix = torch.nan_to_num(k @ update_m @ signal_basis.T, nan=0.0, posinf=0.0, neginf=0.0)
+    signal_scale = torch.linalg.vector_norm(signal_before_matrix, dim=1).median().clamp_min(float(eps))
+    spectral_budget = float(budget) * signal_scale
+    clipped = s_h.clamp(max=float(spectral_budget.item()))
+    hazard_delta = u_h @ torch.diag(s_h - clipped) @ vh_h
+    if ablation_mode == "no_hazard":
+        hazard_delta.zero_()
+    elif ablation_mode == "correction_only":
+        pass
+    elif ablation_mode == "removed_hazard_only":
+        pass
+
+    left_system = generic_basis @ generic_basis.T + max(float(ridge), float(eps)) * torch.eye(
+        generic_basis.shape[0], dtype=torch.float32
+    )
+    left = _solve_symmetric_psd(0.5 * (left_system + left_system.T), hazard_delta)
+    correction_m = generic_basis.T @ left @ hazard_basis
+    correction_norm = torch.linalg.vector_norm(correction_m)
+    base_norm = torch.linalg.vector_norm(update_m).clamp_min(float(eps))
+    cap = max(float(correction_cap), 0.0) * base_norm
+    if float(correction_norm.item()) > float(cap.item()) and float(cap.item()) > 0.0:
+        correction_m = correction_m * (cap / correction_norm.clamp_min(float(eps)))
+        correction_norm = torch.linalg.vector_norm(correction_m)
+
+    if ablation_mode == "correction_only":
+        candidate_m = correction_m
+    elif ablation_mode == "removed_hazard_only":
+        candidate_m = update_m - correction_m
+        candidate_m = update_m - candidate_m
+    else:
+        candidate_m = update_m - correction_m
+
+    def signal_retention(candidate: torch.Tensor) -> torch.Tensor:
+        before = torch.linalg.vector_norm(signal_before_matrix).clamp_min(float(eps))
+        after = torch.linalg.vector_norm(k @ candidate @ signal_basis.T)
+        return after / before
+
+    retention = signal_retention(candidate_m)
+    scale = torch.tensor(1.0)
+    if ablation_mode not in {"correction_only", "removed_hazard_only"}:
+        for _ in range(8):
+            if float(retention.item()) >= float(signal_retention_min):
+                break
+            scale = scale * 0.5
+            candidate_m = update_m - scale * correction_m
+            retention = signal_retention(candidate_m)
+
+    hazard_after_matrix = torch.nan_to_num(generic_basis @ candidate_m @ hazard_basis.T, nan=0.0, posinf=0.0, neginf=0.0)
+    hazard_before = torch.linalg.matrix_norm(hazard_before_matrix, ord=2)
+    hazard_after = torch.linalg.matrix_norm(hazard_after_matrix, ord=2)
+    after_norm = torch.linalg.vector_norm(candidate_m)
+    if ablation_mode != "correction_only" and float(after_norm.item()) > float(base_norm.item()):
+        candidate_m = candidate_m * (base_norm / after_norm.clamp_min(float(eps)))
+        after_norm = torch.linalg.vector_norm(candidate_m)
+
+    diagnostics.update(
+        {
+            "prism_fallback": 0.0,
+            "prism_signal_rank": float(signal_basis.shape[0]),
+            "prism_hazard_rank": float(hazard_basis.shape[0]),
+            "prism_generic_key_rank": float(generic_basis.shape[0]),
+            "prism_horizon": float(horizon),
+            "prism_option_top_k": float(usable_top_k),
+            "prism_budget": float(budget),
+            "prism_correction_cap": float(correction_cap),
+            "prism_spectral_budget": float(spectral_budget.item()),
+            "prism_hazard_spectral_before": float(hazard_before.item()),
+            "prism_hazard_spectral_after": float(hazard_after.item()),
+            "prism_hazard_spectral_ratio": float((hazard_after / hazard_before.clamp_min(float(eps))).item()),
+            "prism_correction_fro": float(correction_norm.item()),
+            "prism_correction_scale": float(scale.item()),
+            "prism_signal_retention": float(retention.item()),
+            "prism_update_fro_after": float(after_norm.item()),
+            "prism_residualize_hazard": 1.0 if residualize_hazard and ablation_mode != "no_residualize" else 0.0,
+            "prism_use_future_outputs": 1.0 if use_future_outputs and ablation_mode != "local_only" else 0.0,
+            "prism_ablation_mode_code": {
+                "none": 0.0,
+                "no_residualize": 1.0,
+                "local_only": 2.0,
+                "shuffled_signal": 3.0,
+                "correction_only": 4.0,
+                "removed_hazard_only": 5.0,
+                "no_hazard": 6.0,
+            }.get(ablation_mode, -1.0),
+        }
+    )
+    return PrismPurificationResult(
+        update=candidate_m.T.contiguous(),
+        signal_basis=signal_basis.contiguous(),
+        hazard_basis=hazard_basis.contiguous(),
+        generic_basis=generic_basis.contiguous(),
         diagnostics=diagnostics,
     )
 
