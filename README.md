@@ -14,6 +14,12 @@ The implementation prioritizes inspectability over speed. It uses:
 - metrics and plots after every paper;
 - optional naive text fine-tuning and Q&A LoRA baselines.
 
+## Modal / Codex Cloud
+
+The repo can launch GPU experiments from a fresh GitHub checkout using Modal.
+See [MODAL.md](MODAL.md) for Codex cloud setup, smoke tests, two-task benchmark
+presets, and artifact download commands.
+
 ## Quick Start
 
 Install dependencies in a Python environment with PyTorch and Transformers:

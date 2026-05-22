@@ -11,6 +11,7 @@ requires-python = ">=3.10"
 dependencies = [
   "accelerate>=0.30",
   "matplotlib>=3.8",
+  "modal>=1.0",
   "numpy>=1.26",
   "pandas>=2.2",
   "peft>=0.11",

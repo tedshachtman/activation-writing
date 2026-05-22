@@ -187,6 +187,24 @@ PRESETS: dict[str, Preset] = {
             "--seal-disable-apply",
         ),
     ),
+    "seal_qrico": Preset(
+        name="seal_qrico",
+        description="Q-RICO plus signed anti-erasure, canonical surprise, and gauge sealing.",
+        args=(
+            "--intrinsic-target-purifier",
+            "seal_qrico",
+            "--qrico-deflate-key-rank",
+            "4",
+            "--qrico-deflate-value-rank",
+            "4",
+            "--qrico-solve-mode",
+            "residual_filter",
+            "--qrico-scramble-weight",
+            "0.0",
+            "--qrico-disable-layer-trust",
+            "--seal-canonicalize-surprise",
+        ),
+    ),
 }
 
 

@@ -13,6 +13,45 @@ import subprocess
 import modal
 
 
+LOCAL_REPO = Path(__file__).resolve().parents[1]
+
+
+def ignore_mount(path: Path) -> bool:
+    parts = set(path.parts)
+    if parts & {
+        ".git",
+        ".modal",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".venv",
+        "__pycache__",
+        "build",
+        "caic.egg-info",
+        "dist",
+        "modal-runs",
+        "runs",
+    }:
+        return True
+    return path.name == ".DS_Store" or path.name.endswith(
+        (
+            ".bin",
+            ".ckpt",
+            ".db",
+            ".gguf",
+            ".log",
+            ".npy",
+            ".npz",
+            ".pt",
+            ".pth",
+            ".pyc",
+            ".safetensors",
+            ".sqlite",
+            ".tmp",
+        )
+    )
+
+
 app = modal.App("caic-minilang-audit")
 
 image = (
@@ -28,15 +67,9 @@ image = (
         "transformers>=4.51,<5",
     )
     .add_local_dir(
-        ".",
+        LOCAL_REPO,
         remote_path="/app",
-        ignore=[
-            ".git",
-            ".pytest_cache",
-            "__pycache__",
-            "runs",
-            "*.pyc",
-        ],
+        ignore=ignore_mount,
     )
 )
 
