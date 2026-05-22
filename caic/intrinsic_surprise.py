@@ -144,6 +144,23 @@ class PrismPurificationResult:
 
 
 @dataclass
+class TraceQResult:
+    """TRACE-Q-purified update plus diagnostics.
+
+    ``update`` is row-major MLP down delta, shaped ``[d_model, d_ff]``.
+    This first implementation uses same-pass local option contrasts as a cheap
+    endpoint tangent proxy, then separates object-supported readout movement
+    from ambient/generic collateral movement.
+    """
+
+    update: torch.Tensor
+    object_basis: torch.Tensor
+    ambient_basis: torch.Tensor
+    generic_basis: torch.Tensor
+    diagnostics: dict[str, float]
+
+
+@dataclass
 class OcepPurificationResult:
     """OCEP-purified update plus diagnostics.
 
@@ -3562,6 +3579,272 @@ def prism_q_purify_update(
         update=candidate_m.T.contiguous(),
         signal_basis=signal_basis.contiguous(),
         hazard_basis=hazard_basis.contiguous(),
+        generic_basis=generic_basis.contiguous(),
+        diagnostics=diagnostics,
+    )
+
+
+def trace_q_purify_update(
+    update: torch.Tensor,
+    *,
+    keys: torch.Tensor,
+    targets: torch.Tensor,
+    weights: torch.Tensor,
+    all_keys: torch.Tensor,
+    token_indices: torch.Tensor,
+    logit_top_values: torch.Tensor,
+    logit_top_indices: torch.Tensor,
+    lm_head_indices: torch.Tensor,
+    lm_head_rows: torch.Tensor,
+    layer: nn.Module | None = None,
+    negative_keys: torch.Tensor | None = None,
+    output_basis: torch.Tensor | None = None,
+    object_endpoints: int = 16,
+    ambient_endpoints: int = 32,
+    option_top_k: int = 8,
+    option_contrasts: int = 4,
+    object_rank: int = 16,
+    ambient_rank: int = 16,
+    generic_key_rank: int = 128,
+    low_surprise_quantile: float = 0.35,
+    target_tau: float = 1.0,
+    target_floor: float = 0.10,
+    collateral_weight: float = 0.25,
+    layer_trust_threshold: float = 2.0,
+    eps: float = 1e-6,
+) -> TraceQResult:
+    """TRACE-Q local endpoint-tangent purifier.
+
+    This is the first cheap implementation of the TRACE-Q idea. It does not
+    backpropagate exact downstream VJPs. Instead, it builds object and ambient
+    local option-contrast bases from the same pass, residualizes ambient
+    contrasts against object contrasts, keeps update components that live in an
+    object-predominant readout subspace, and shrinks generic-key to ambient
+    residual movement.
+    """
+
+    update_f = torch.nan_to_num(update.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    k = torch.nan_to_num(keys.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    y = torch.nan_to_num(targets.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    w = torch.nan_to_num(weights.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+    all_k = torch.nan_to_num(all_keys.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    tok = token_indices.detach().cpu().long()
+    top_vals = torch.nan_to_num(logit_top_values.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    top_idx = logit_top_indices.detach().cpu().long()
+    lm_idx = lm_head_indices.detach().cpu().long()
+    lm_rows = torch.nan_to_num(lm_head_rows.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+
+    if update_f.ndim != 2:
+        raise ValueError(f"update must be [d,m], got {tuple(update_f.shape)}")
+    d_model, d_ff = update_f.shape
+    if k.ndim != 2 or k.shape[1] != d_ff or y.ndim != 2 or y.shape[1] != d_model or k.shape[0] != y.shape[0]:
+        raise ValueError("TRACE-Q keys/targets do not match update shape")
+    if w.ndim != 1 or w.shape[0] != k.shape[0]:
+        raise ValueError(f"TRACE-Q weights must be [{k.shape[0]}], got {tuple(w.shape)}")
+    if all_k.ndim != 2 or all_k.shape[1] != d_ff:
+        raise ValueError("TRACE-Q all_keys do not match update shape")
+    if tok.numel() != k.shape[0]:
+        raise ValueError("TRACE-Q token_indices must align with selected rows")
+    if top_vals.ndim != 2 or top_idx.ndim != 2 or top_vals.shape != top_idx.shape:
+        raise ValueError("TRACE-Q logit_top_values/logit_top_indices must be matching [T,k]")
+
+    diagnostics: dict[str, float] = {
+        "trace_q_enabled": 1.0,
+        "trace_q_update_fro_before": float(torch.linalg.vector_norm(update_f).item()),
+    }
+    if k.shape[0] == 0 or float(torch.linalg.vector_norm(update_f).item()) <= 1e-12:
+        diagnostics["trace_q_fallback"] = 1.0
+        return TraceQResult(
+            update=update_f.contiguous(),
+            object_basis=torch.empty(0, d_model),
+            ambient_basis=torch.empty(0, d_model),
+            generic_basis=torch.empty(0, d_ff),
+            diagnostics=diagnostics,
+        )
+
+    def cap_rows(rows: torch.Tensor, max_rows: int) -> torch.Tensor:
+        if rows.shape[0] <= max_rows or max_rows <= 0:
+            return rows
+        idx = torch.linspace(0, rows.shape[0] - 1, steps=max_rows).round().long().unique()
+        return rows[idx]
+
+    def contrast_rows_for_tokens(tokens: torch.Tensor, max_tokens: int) -> torch.Tensor:
+        if tokens.numel() == 0 or top_idx.numel() == 0:
+            return torch.empty(0, d_model, dtype=torch.float32)
+        tokens = tokens.flatten().long().unique()
+        if tokens.numel() > max_tokens > 0:
+            tokens = tokens[:max_tokens]
+        tokens = tokens.clamp(min=0, max=top_idx.shape[0] - 1)
+        usable_top_k = max(2, min(int(option_top_k), top_idx.shape[1]))
+        keep_contrasts = max(1, min(int(option_contrasts), usable_top_k))
+        selected_top = top_idx[tokens, :usable_top_k]
+        selected_vals = top_vals[tokens, :usable_top_k]
+        selected_rows = _lookup_weight_rows(selected_top, stored_indices=lm_idx, stored_rows=lm_rows)
+        probs = torch.softmax(selected_vals, dim=1)
+        expected = (probs.unsqueeze(-1) * selected_rows).sum(dim=1, keepdim=True)
+        contrasts = selected_rows - expected
+        if keep_contrasts < usable_top_k:
+            contrast_norms = torch.linalg.vector_norm(contrasts, dim=2)
+            local_idx = torch.topk(contrast_norms, k=keep_contrasts, dim=1, largest=True).indices
+            contrasts = torch.gather(
+                contrasts,
+                1,
+                local_idx.unsqueeze(-1).expand(-1, -1, d_model),
+            )
+        return contrasts.reshape(-1, d_model)
+
+    w_rank = torch.argsort(w, descending=True)
+    object_tokens = tok[w_rank[: max(1, min(int(object_endpoints), tok.numel()))]]
+    object_rows = contrast_rows_for_tokens(object_tokens, int(object_endpoints))
+
+    row_scores = _token_row_surprise(all_k, layer)
+    q = min(max(float(low_surprise_quantile), 0.0), 1.0)
+    threshold = torch.quantile(row_scores, q)
+    low_mask = row_scores <= threshold
+    if int(low_mask.sum().item()) < 2:
+        low_mask = row_scores <= row_scores.median()
+    low_idx = torch.nonzero(low_mask, as_tuple=False).flatten()
+    if top_vals.shape[0] > 0 and top_vals.shape[1] >= 2 and low_idx.numel() > 0:
+        capped_low = low_idx.clamp(max=top_vals.shape[0] - 1)
+        margins = top_vals[capped_low, 0] - top_vals[capped_low, 1]
+        order = torch.argsort(margins, descending=True)
+        ambient_tokens = capped_low[order[: max(1, min(int(ambient_endpoints), capped_low.numel()))]]
+    else:
+        ambient_tokens = low_idx[: max(1, min(int(ambient_endpoints), low_idx.numel()))]
+    if ambient_tokens.numel() > 0 and object_tokens.numel() > 0:
+        object_set = set(int(v) for v in object_tokens.flatten().tolist())
+        ambient_tokens = torch.tensor(
+            [int(v) for v in ambient_tokens.flatten().tolist() if int(v) not in object_set],
+            dtype=torch.long,
+        )
+    ambient_rows = contrast_rows_for_tokens(ambient_tokens, int(ambient_endpoints))
+    if output_basis is not None and output_basis.numel() > 0:
+        out = output_basis.detach().float().cpu()
+        if out.ndim == 1:
+            out = out.unsqueeze(0)
+        if out.ndim == 2 and out.shape[1] == d_model:
+            ambient_rows = torch.cat([ambient_rows, cap_rows(out, max(int(ambient_rank) * 2, int(ambient_rank)))], dim=0)
+
+    object_basis = _fast_basis_with_rows(object_rows, max(1, int(object_rank)), d_model)
+    ambient_raw = _fast_basis_with_rows(ambient_rows, max(1, int(ambient_rank) * 2), d_model)
+    if object_basis.numel() > 0 and ambient_raw.numel() > 0:
+        ambient_resid = ambient_raw - (ambient_raw @ object_basis.T) @ object_basis
+    else:
+        ambient_resid = ambient_raw
+    ambient_basis = _fast_basis_with_rows(ambient_resid, max(1, int(ambient_rank)), d_model)
+
+    signal_key_basis = _fast_basis_with_rows(k * (w / w.mean().clamp_min(1e-12)).sqrt().unsqueeze(1), max(1, min(k.shape[0], 64)), d_ff)
+    generic_parts = [all_k[low_mask]]
+    if negative_keys is not None and negative_keys.numel() > 0:
+        neg = torch.nan_to_num(negative_keys.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+        if neg.ndim == 2 and neg.shape[1] == d_ff:
+            generic_parts.append(cap_rows(neg, max(int(generic_key_rank), 1)))
+    generic_raw = _fast_basis_with_rows(
+        torch.cat([part for part in generic_parts if part.numel() > 0], dim=0),
+        max(1, int(generic_key_rank) * 2),
+        d_ff,
+    )
+    if signal_key_basis.numel() > 0 and generic_raw.numel() > 0:
+        generic_resid = generic_raw - (generic_raw @ signal_key_basis.T) @ signal_key_basis
+    else:
+        generic_resid = generic_raw
+    generic_basis = _fast_basis_with_rows(generic_resid, max(1, int(generic_key_rank)), d_ff)
+
+    if object_basis.numel() == 0 or ambient_basis.numel() == 0 or generic_basis.numel() == 0:
+        diagnostics["trace_q_fallback"] = 1.0
+        return TraceQResult(
+            update=update_f.contiguous(),
+            object_basis=object_basis.contiguous(),
+            ambient_basis=ambient_basis.contiguous(),
+            generic_basis=generic_basis.contiguous(),
+            diagnostics=diagnostics,
+        )
+
+    # Object-predominant target/update projector.  Work in the low-rank union
+    # of object and ambient endpoint contrasts to avoid a dense d x d eigensolve.
+    union_basis = _fast_basis_with_rows(
+        torch.cat([object_basis, ambient_basis], dim=0),
+        max(1, min(int(object_rank) + int(ambient_rank), d_model)),
+        d_model,
+    )
+    obj_u = object_basis @ union_basis.T
+    amb_u = ambient_basis @ union_basis.T
+    mo = obj_u.T @ obj_u
+    mc = amb_u.T @ amb_u
+    eye = torch.eye(union_basis.shape[0], dtype=torch.float32)
+    try:
+        evals_b, evecs_b = torch.linalg.eigh(0.5 * (mc + mc.T) + float(eps) * eye)
+        inv_sqrt = evecs_b @ torch.diag(evals_b.clamp_min(float(eps)).rsqrt()) @ evecs_b.T
+        sym = inv_sqrt.T @ (0.5 * (mo + mo.T)) @ inv_sqrt
+        evals, evecs = torch.linalg.eigh(0.5 * (sym + sym.T))
+        modes = inv_sqrt @ evecs
+        tau = max(float(target_tau), float(eps))
+        gains = (evals.clamp_min(0.0) / (evals.clamp_min(0.0) + tau)).clamp(0.0, 1.0)
+        coord_projector = modes @ torch.diag(gains) @ modes.T
+        coord_projector = 0.5 * (coord_projector + coord_projector.T)
+    except RuntimeError:
+        coord_projector = torch.eye(union_basis.shape[0], dtype=torch.float32)
+        evals = torch.ones(union_basis.shape[0], dtype=torch.float32)
+        gains = torch.ones_like(evals)
+    update_m = update_f.T.contiguous()
+    projected_part = (update_m @ union_basis.T) @ coord_projector @ union_basis
+    full_union_part = (update_m @ union_basis.T) @ union_basis
+    outside_part = update_m - full_union_part
+    floor = min(max(float(target_floor), 0.0), 1.0)
+    candidate_m = outside_part * floor + projected_part + floor * (full_union_part - projected_part)
+
+    # Two-sided collateral shrink in the residualized generic-key x ambient
+    # contrast block.  Bases are orthonormal rows, so the proximal shrink has a
+    # simple closed form in that block.
+    collateral_before_matrix = generic_basis @ candidate_m @ ambient_basis.T
+    shrink = float(collateral_weight) / (1.0 + max(float(collateral_weight), 0.0))
+    if shrink > 0.0:
+        correction = shrink * (generic_basis.T @ collateral_before_matrix @ ambient_basis)
+        candidate_m = candidate_m - correction
+    else:
+        correction = torch.zeros_like(candidate_m)
+
+    object_after = torch.linalg.vector_norm(k @ candidate_m @ object_basis.T).square()
+    collateral_after = torch.linalg.vector_norm(generic_basis @ candidate_m @ ambient_basis.T).square()
+    quotient = object_after / collateral_after.clamp_min(float(eps))
+    trust_threshold = max(float(layer_trust_threshold), float(eps))
+    trust = torch.sqrt((quotient / trust_threshold).clamp(min=0.0, max=1.0))
+    candidate_m = candidate_m * trust
+
+    before_norm = torch.linalg.vector_norm(update_f).clamp_min(float(eps))
+    after_norm = torch.linalg.vector_norm(candidate_m).clamp_min(float(eps))
+    if float(after_norm.item()) > float(before_norm.item()):
+        candidate_m = candidate_m * (before_norm / after_norm)
+        after_norm = torch.linalg.vector_norm(candidate_m).clamp_min(float(eps))
+
+    diagnostics.update(
+        {
+            "trace_q_fallback": 0.0,
+            "trace_q_object_rank": float(object_basis.shape[0]),
+            "trace_q_ambient_rank": float(ambient_basis.shape[0]),
+            "trace_q_generic_key_rank": float(generic_basis.shape[0]),
+            "trace_q_union_rank": float(union_basis.shape[0]),
+            "trace_q_object_endpoints": float(object_tokens.numel()),
+            "trace_q_ambient_endpoints": float(ambient_tokens.numel()),
+            "trace_q_target_floor": float(floor),
+            "trace_q_target_tau": float(target_tau),
+            "trace_q_collateral_weight": float(collateral_weight),
+            "trace_q_collateral_before": float(torch.linalg.vector_norm(collateral_before_matrix).item()),
+            "trace_q_collateral_after": float(torch.linalg.vector_norm(generic_basis @ candidate_m @ ambient_basis.T).item()),
+            "trace_q_correction_fro": float(torch.linalg.vector_norm(correction).item()),
+            "trace_q_object_gain_after": float(object_after.item()),
+            "trace_q_collateral_gain_after": float(collateral_after.item()),
+            "trace_q_quotient": float(quotient.item()),
+            "trace_q_layer_trust": float(trust.item()),
+            "trace_q_update_fro_after": float(after_norm.item()),
+            "trace_q_generalized_eval_max": float(evals.max().item()) if evals.numel() else 0.0,
+            "trace_q_generalized_gain_mean": float(gains.mean().item()) if gains.numel() else 0.0,
+        }
+    )
+    return TraceQResult(
+        update=candidate_m.T.contiguous(),
+        object_basis=object_basis.contiguous(),
+        ambient_basis=ambient_basis.contiguous(),
         generic_basis=generic_basis.contiguous(),
         diagnostics=diagnostics,
     )

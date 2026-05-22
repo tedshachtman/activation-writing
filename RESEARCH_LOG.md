@@ -6937,3 +6937,105 @@ Q-RICO/key16-style filtering as the safest available weight-only continual
 baseline, despite low acquisition. The next move should focus on improving
 acquisition without reintroducing the broad sentinel-damaging component, and it
 should use fast diagnostics before promotion to the full two-task benchmark.
+
+## 2026-05-22: TRACE-Q Local Approximation Failed Fast Gate
+
+5.5 Pro proposed TRACE-Q: keep the Q-RICO/key16 scaffold, but build an
+object-vs-ambient downstream tangent quotient. The intended full version uses
+same-pass VJP rows through later frozen layers:
+
+\[
+L_{\ell,e}=C_e W_U J_{\mathrm{rms}}(h_e)J_{\ell\rightarrow e}.
+\]
+
+The implementation here is a cheap first approximation, not full TRACE-Q:
+
+- added `--intrinsic-target-purifier trace_q`;
+- used Q-RICO residual-filter (`deflate 4/4`, no layer trust) as the scaffold;
+- selected object endpoints from high-weight relational rows;
+- selected ambient endpoints from low-surprise, high-confidence same-pass
+  positions;
+- built local option contrast rows from endpoint top-k LM-head rows;
+- built object and ambient residual bases from those local contrast rows;
+- residualized generic keys against object keys;
+- applied an object-predominant target projector plus a two-sided
+  generic-key -> ambient-contrast collateral shrink.
+
+Verification:
+
+```bash
+python -m py_compile caic/intrinsic_surprise.py \
+  scripts/minilang_write.py \
+  scripts/minilang_intrinsic_continual.py \
+  scripts/continual_benchmark_grid.py \
+  tests/test_intrinsic_surprise.py
+python -m pytest tests/test_intrinsic_surprise.py -q
+# 39 passed
+```
+
+Added fast presets:
+
+- `qrico_key16_fast`: Q-RICO control on the same reduced fixture;
+- `trace_q_fast`: projector + collateral TRACE-local;
+- `trace_q_projector_fast`: target projector only;
+- `trace_q_collateral_fast`: no target projection, stronger collateral shrink.
+
+All use 40 teacher-filter candidates, 4 eval items, layers
+`4,8,12,16,20,24,27`, and early-stop after task 0 if c2w is nonzero or task0
+does not reach at least `1/4`.
+
+### Fast Diagnostic Results
+
+All runs used the same reduced split:
+
+- sentinel before: `12/25`, mean margin `0.712`;
+- Lyran baseline `1/4`, context `4/4`;
+- Vomar baseline `1/4`, context `4/4`.
+
+| Preset | Task0 edited | Task0 delta | Sentinel c2w | w2c | Before-correct drop | Sentinel acc delta |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `qrico_key16_fast` | `2/4` | `+1/4` | `3` | `1` | `2.999` | `-0.08` |
+| `trace_q_fast` | `1/4` | `0` | `2` | `6` | `1.117` | `+0.16` |
+| `trace_q_projector_fast` | `1/4` | `0` | `3` | `6` | `1.489` | `+0.12` |
+| `trace_q_collateral_fast` | `1/4` | `0` | `2` | `3` | `2.089` | `+0.04` |
+
+TRACE diagnostics:
+
+- `trace_q_fast`: mean measured collateral went from `0.0683` to
+  `~7.6e-7`, but c2w remained `2` and acquisition fell to baseline.
+- `trace_q_projector_fast`: no collateral correction, c2w remained `3`.
+- `trace_q_collateral_fast`: collateral-only reduced c2w from Q-RICO's `3` to
+  `2`, but still killed discrete acquisition.
+
+Interpretation:
+
+The local TRACE approximation is not a frontier move. It reproduces the
+familiar tradeoff: reducing the measured local collateral coordinate lowers
+sentinel damage somewhat but removes the threshold-crossing task acquisition.
+The measured local object/ambient contrast quotient is therefore not the
+missing safety coordinate.
+
+This does **not** fully falsify TRACE-Q as originally stated, because the
+original proposal required exact or semi-exact downstream tangent transport
+through later frozen blocks. What is falsified is the cheap local endpoint
+contrast version. The fast gate did its job: do not promote `trace_q` local to
+the full all-layer two-task benchmark without implementing a materially better
+`J_{\ell\rightarrow e}` transport.
+
+Current practical baseline:
+
+- Q-RICO/key16 remains the only scaffold with a known safe single-task frontier
+  (`5/20`, c2w `0`, drop `0.964` on the earlier full single-task split);
+- on the reduced two-task fixture it is acquisition-positive but unsafe;
+- local downstream-ish filters keep failing by deleting acquisition before
+  they solve c2w.
+
+Next research implication:
+
+The fastest useful ladder is now:
+
+1. keep `qrico_key16_fast` as the reduced-fixture control;
+2. only test new safety coordinates on the fast fixture first;
+3. require `>=2/4` task0, `0` c2w, and drop `<1.0` before a full run;
+4. if revisiting TRACE, implement actual downstream VJP/frozen-attention
+   transport rather than another local LM-head contrast sketch.

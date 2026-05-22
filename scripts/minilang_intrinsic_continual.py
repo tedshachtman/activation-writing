@@ -173,6 +173,7 @@ def parse_args() -> argparse.Namespace:
             "orca_karp",
             "qrico",
             "prism_q",
+            "trace_q",
             "spectra",
             "seal_qrico",
             "ocep_residual",
@@ -263,6 +264,18 @@ def parse_args() -> argparse.Namespace:
         ],
         default="none",
     )
+    parser.add_argument("--trace-object-endpoints", type=int, default=16)
+    parser.add_argument("--trace-ambient-endpoints", type=int, default=32)
+    parser.add_argument("--trace-option-top-k", type=int, default=8)
+    parser.add_argument("--trace-option-contrasts", type=int, default=4)
+    parser.add_argument("--trace-object-rank", type=int, default=16)
+    parser.add_argument("--trace-ambient-rank", type=int, default=16)
+    parser.add_argument("--trace-generic-key-rank", type=int, default=128)
+    parser.add_argument("--trace-target-tau", type=float, default=1.0)
+    parser.add_argument("--trace-target-floor", type=float, default=0.10)
+    parser.add_argument("--trace-gamma", type=float, default=0.25)
+    parser.add_argument("--trace-layer-trust-threshold", type=float, default=2.0)
+    parser.add_argument("--trace-vjp-mode", choices=["local"], default="local")
     parser.add_argument("--seal-eta-erase", type=float, default=2.0)
     parser.add_argument("--seal-eta-seal", type=float, default=0.05)
     parser.add_argument("--seal-max-scale", type=float, default=1.10)

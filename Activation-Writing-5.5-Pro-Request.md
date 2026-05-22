@@ -1,4 +1,4 @@
-# Request For GPT-5.5 Pro: One-Pass Surprise Consolidation After PRISM-Q Falsifier
+# Request For GPT-5.5 Pro: One-Pass Surprise Consolidation After TRACE-Q Fast Falsifier
 
 Date: 2026-05-22
 
@@ -9,10 +9,153 @@ Audience: GPT-5.5 Pro. I am giving you two files:
 2. This file: the current prompt/request. Please read the full research log
    first, then answer this prompt.
 
+## 2026-05-22 Update: TRACE-Q Local Approximation Failed Fast Gate
+
+Please treat this update as the current live state. The older PRISM-Q and
+SEAL-Q sections below are retained for continuity, and the full research log is
+attached separately.
+
+Your latest TRACE-Q direction was implemented in a cheap first-pass form and
+tested on the reduced two-task + expanded-sentinel fast gate. It did **not**
+pass the gate.
+
+Important caveat:
+
+This is not the exact downstream-VJP TRACE-Q you proposed. It used local
+endpoint option contrasts from top-k LM-head rows as a cheap proxy. It did not
+implement exact `J_{\ell\rightarrow e}`, exact RMSNorm/logit VJP, attention
+V/O transport, or full frozen-stack tangent transport.
+
+Implementation added:
+
+- `--intrinsic-target-purifier trace_q`;
+- Q-RICO residual-filter scaffold (`deflate 4/4`, no layer trust);
+- object endpoints from high-weight relational rows;
+- ambient endpoints from low-surprise, high-confidence same-pass positions;
+- local option contrast rows from endpoint top-k LM-head rows;
+- object/ambient residual bases;
+- generic keys residualized against object keys;
+- object-predominant target projector;
+- two-sided generic-key -> ambient-contrast collateral shrink;
+- fast presets:
+  - `qrico_key16_fast`;
+  - `trace_q_fast`;
+  - `trace_q_projector_fast`;
+  - `trace_q_collateral_fast`.
+
+Verification:
+
+```text
+39 passed
+```
+
+### Fast Gate Setup
+
+- Qwen/Qwen3-1.7B;
+- two tasks: Lyran then Vomar;
+- 6 lessons/task, 8 examples/lesson;
+- teacher-filtered 4-question eval per task from 40 candidates;
+- representative layers `4,8,12,16,20,24,27`;
+- `relational_aggregate`, context-value, final-aligned;
+- key feature top-k `16`;
+- target scale `.10`;
+- output/input weak stack `256/10`, `256/20`;
+- expanded sentinel suite;
+- early-stop after task0 if sentinel c2w is nonzero or task0 edited correct is
+  below `1/4`;
+- no old-key negatives, no old atoms, no Fisher/sketch sidecar state.
+
+Fast split baseline:
+
+- sentinel before: `12/25`, mean margin `0.712`;
+- Lyran baseline `1/4`, context `4/4`;
+- Vomar baseline `1/4`, context `4/4`.
+
+### Fast Results
+
+| Preset | Task0 edited | Task0 delta | Sentinel c2w | w2c | Before-correct drop | Sentinel acc delta |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `qrico_key16_fast` | `2/4` | `+1/4` | `3` | `1` | `2.999` | `-0.08` |
+| `trace_q_fast` | `1/4` | `0` | `2` | `6` | `1.117` | `+0.16` |
+| `trace_q_projector_fast` | `1/4` | `0` | `3` | `6` | `1.489` | `+0.12` |
+| `trace_q_collateral_fast` | `1/4` | `0` | `2` | `3` | `2.089` | `+0.04` |
+
+Diagnostics:
+
+- `trace_q_fast` drove its measured local collateral from mean `0.0683` to
+  `~7.6e-7`, but task acquisition fell to baseline and `2` sentinel c2w
+  remained.
+- `trace_q_projector_fast` showed that the target projector alone does not
+  remove c2w.
+- `trace_q_collateral_fast` showed that collateral-only shrink reduces c2w a
+  little, but still deletes discrete task acquisition.
+
+Interpretation:
+
+The cheap local TRACE approximation is not a frontier move. It repeats the
+familiar pattern: reducing the measured local collateral coordinate lowers
+sentinel damage somewhat, but removes the threshold-crossing task signal before
+solving c2w.
+
+This does **not** fully falsify the exact TRACE-Q idea, because exact
+downstream transport remains unimplemented. It does falsify another local
+LM-head/top-k option-contrast approximation as the relevant safety coordinate.
+
+### Current Live State
+
+The current practical baseline remains Q-RICO/key16:
+
+- known full single-task safe frontier: `5/20`, context captures `11/20`,
+  centered cosine `0.578`, projection ratio `0.162`, sentinel c2w `0`,
+  before-correct drop `0.964`;
+- reduced two-task fast fixture: acquisition-positive (`2/4`) but unsafe
+  (`3` c2w);
+- two-task full benchmark: weak acquisition/retention and old-key negatives
+  preserve mainly by suppressing task1.
+
+Local output filters, same-pass anchors, gauge sealing, anti-erasure,
+object-span preservation, SPECTRA-style local tail/hazard clipping, first-pass
+PRISM, and local TRACE have all failed or collapsed into safe/inert behavior.
+
+The high-level goal and hard constraints are unchanged:
+
+- one forward pass over the lesson/context;
+- closed-form write;
+- surprise/innovation/free-energy driven;
+- all-layer compatible;
+- no null prompts, quizzes, answer traces, labels, probes, SAE, RAG, router;
+- no sidecar state across sessions after weights are written;
+- primary benchmark is two-task continual learning plus sentinel preservation,
+  not single-task frontier chasing.
+
+### New Ask
+
+Please propose the next implementable mathematical tool.
+
+It must be specific enough to implement: tensors, objectives, closed-form solve,
+required diagnostics, first runs, ablations, and falsification criteria.
+
+Please address:
+
+1. Given PRISM strict clipping and TRACE-local both reduced their measured
+   hazards but did not solve real sentinel c2w, what safety coordinate should
+   replace local LM-head/top-k option sketches?
+2. Is exact downstream tangent transport worth implementing, or do these
+   failures imply the direction should shift away from propagated readout
+   quotients?
+3. Should we improve acquisition from the safe Q-RICO baseline instead of
+   trying to purify raw relational/high-rank residual maps?
+4. Under the no-sidecar rule, is robust two-task retention identifiable from
+   only current weights and a new context pass? If not, state the minimal
+   additional assumption that still respects the spirit of merged-weight
+   consolidation.
+5. What is the fastest diagnostic ladder before promoting a method to the full
+   two-task benchmark?
+
 ## 2026-05-22 Update: PRISM-Q Falsifier And New Ask
 
-Please treat this update as the current live state. The older material below is
-background and the full research log is attached separately.
+This older section is retained for continuity. The TRACE-Q section above is the
+current live state.
 
 Your latest PRISM-Q direction was implemented in a first-pass cheap form and
 tested on the primary two-task + expanded-sentinel benchmark. It did not solve

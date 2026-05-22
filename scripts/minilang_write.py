@@ -35,6 +35,7 @@ from caic.intrinsic_surprise import (
     project_rows_away_from_basis,
     qrico_purify_update,
     seal_qrico_purify_update,
+    trace_q_purify_update,
     select_intrinsic_compatibility_residual_write,
     select_intrinsic_conditional_relation_innovation_write,
     select_intrinsic_conjunctive_feature_birth_update,
@@ -2376,6 +2377,7 @@ def parse_args() -> argparse.Namespace:
             "orca_karp",
             "qrico",
             "prism_q",
+            "trace_q",
             "spectra",
             "seal_qrico",
             "ocep_residual",
@@ -2466,6 +2468,18 @@ def parse_args() -> argparse.Namespace:
         ],
         default="none",
     )
+    parser.add_argument("--trace-object-endpoints", type=int, default=16)
+    parser.add_argument("--trace-ambient-endpoints", type=int, default=32)
+    parser.add_argument("--trace-option-top-k", type=int, default=8)
+    parser.add_argument("--trace-option-contrasts", type=int, default=4)
+    parser.add_argument("--trace-object-rank", type=int, default=16)
+    parser.add_argument("--trace-ambient-rank", type=int, default=16)
+    parser.add_argument("--trace-generic-key-rank", type=int, default=128)
+    parser.add_argument("--trace-target-tau", type=float, default=1.0)
+    parser.add_argument("--trace-target-floor", type=float, default=0.10)
+    parser.add_argument("--trace-gamma", type=float, default=0.25)
+    parser.add_argument("--trace-layer-trust-threshold", type=float, default=2.0)
+    parser.add_argument("--trace-vjp-mode", choices=["local"], default="local")
     parser.add_argument("--seal-eta-erase", type=float, default=2.0)
     parser.add_argument("--seal-eta-seal", type=float, default=0.05)
     parser.add_argument("--seal-max-scale", type=float, default=1.10)
@@ -3105,6 +3119,7 @@ def run_intrinsic_surprise_writes(
             "orca_karp",
             "qrico",
             "prism_q",
+            "trace_q",
             "spectra",
             "seal_qrico",
             "ocep_residual",
@@ -3117,6 +3132,8 @@ def run_intrinsic_surprise_writes(
                 if args.intrinsic_target_purifier in {"qrico", "seal_qrico"}
                 else int(args.prism_option_top_k)
                 if args.intrinsic_target_purifier == "prism_q"
+                else int(args.trace_option_top_k)
+                if args.intrinsic_target_purifier == "trace_q"
                 else int(args.spectra_option_top_k)
                 if args.intrinsic_target_purifier == "spectra"
                 else max(2, int(args.ocep_option_local_rank) * 2)
@@ -3763,6 +3780,78 @@ def run_intrinsic_surprise_writes(
                 if selection.diagnostics is None:
                     selection.diagnostics = {}
                 selection.diagnostics.update(prism.diagnostics)
+            elif args.intrinsic_target_purifier == "trace_q":
+                qrico = qrico_purify_update(
+                    update,
+                    keys=selection.keys,
+                    targets=targets,
+                    weights=positive_weights,
+                    all_keys=usable_keys,
+                    all_outputs=captures[layer_idx].outputs[: usable_keys.shape[0]],
+                    token_indices=selection.token_indices,
+                    logit_top_values=sharp_top_values,
+                    logit_top_indices=sharp_top_indices,
+                    lm_head_indices=sharp_lm_indices,
+                    lm_head_rows=sharp_lm_rows,
+                    layer=layer,
+                    negative_keys=negative_keys,
+                    output_basis=karp_output_basis,
+                    deflate_key_rank=args.qrico_deflate_key_rank,
+                    deflate_value_rank=args.qrico_deflate_value_rank,
+                    rank=args.qrico_rank,
+                    option_sketch_rank=args.qrico_option_sketch_rank,
+                    target_parallel_rank=args.qrico_target_parallel_rank,
+                    scramble_weight=args.qrico_scramble_weight,
+                    residual_row_weight_power=args.qrico_residual_row_weight_power,
+                    quotient_mode=args.qrico_quotient_mode,
+                    solve_mode=args.qrico_solve_mode,
+                    low_surprise_quantile=args.karp_low_surprise_quantile,
+                    negative_weight=args.intrinsic_surprise_input_penalty_weight,
+                    output_weight=args.intrinsic_surprise_output_penalty_weight,
+                    cca_ridge=args.qrico_cca_ridge,
+                    layer_evidence_min=args.qrico_layer_evidence_min,
+                    layer_evidence_target=args.qrico_layer_evidence_target,
+                    apply_layer_trust=not args.qrico_disable_layer_trust,
+                    risk_ratio_cap=args.karp_risk_ratio_cap,
+                )
+                trace = trace_q_purify_update(
+                    qrico.update,
+                    keys=selection.keys,
+                    targets=targets,
+                    weights=positive_weights,
+                    all_keys=usable_keys,
+                    token_indices=selection.token_indices,
+                    logit_top_values=sharp_top_values,
+                    logit_top_indices=sharp_top_indices,
+                    lm_head_indices=sharp_lm_indices,
+                    lm_head_rows=sharp_lm_rows,
+                    layer=layer,
+                    negative_keys=negative_keys,
+                    output_basis=karp_output_basis,
+                    object_endpoints=args.trace_object_endpoints,
+                    ambient_endpoints=args.trace_ambient_endpoints,
+                    option_top_k=args.trace_option_top_k,
+                    option_contrasts=args.trace_option_contrasts,
+                    object_rank=args.trace_object_rank,
+                    ambient_rank=args.trace_ambient_rank,
+                    generic_key_rank=args.trace_generic_key_rank,
+                    low_surprise_quantile=args.karp_low_surprise_quantile,
+                    target_tau=args.trace_target_tau,
+                    target_floor=args.trace_target_floor,
+                    collateral_weight=args.trace_gamma,
+                    layer_trust_threshold=args.trace_layer_trust_threshold,
+                )
+                update = trace.update
+                fit = selection.keys.detach().float() @ update.T
+                stats.fit_rmse = float(torch.sqrt(torch.mean((fit - targets.detach().float()).square())).item())
+                stats.update_fro = float(torch.linalg.vector_norm(update).item())
+                if negative_keys is not None and negative_keys.numel() > 0:
+                    neg_fit = negative_keys.detach().float() @ update.T
+                    stats.negative_rmse = float(torch.sqrt(torch.mean(neg_fit.square())).item())
+                if selection.diagnostics is None:
+                    selection.diagnostics = {}
+                selection.diagnostics.update(qrico.diagnostics)
+                selection.diagnostics.update(trace.diagnostics)
             elif args.intrinsic_target_purifier == "ocep_residual":
                 up_module = getattr(getattr(layer, "mlp", None), "up_proj", None)
                 if up_module is None:
@@ -4077,6 +4166,18 @@ def run_intrinsic_surprise_writes(
                     "prism_no_residualize_hazard": bool(args.prism_no_residualize_hazard),
                     "prism_disable_future": bool(args.prism_disable_future),
                     "prism_ablation": args.prism_ablation,
+                    "trace_object_endpoints": args.trace_object_endpoints,
+                    "trace_ambient_endpoints": args.trace_ambient_endpoints,
+                    "trace_option_top_k": args.trace_option_top_k,
+                    "trace_option_contrasts": args.trace_option_contrasts,
+                    "trace_object_rank": args.trace_object_rank,
+                    "trace_ambient_rank": args.trace_ambient_rank,
+                    "trace_generic_key_rank": args.trace_generic_key_rank,
+                    "trace_target_tau": args.trace_target_tau,
+                    "trace_target_floor": args.trace_target_floor,
+                    "trace_gamma": args.trace_gamma,
+                    "trace_layer_trust_threshold": args.trace_layer_trust_threshold,
+                    "trace_vjp_mode": args.trace_vjp_mode,
                     "seal_eta_erase": args.seal_eta_erase,
                     "seal_eta_seal": args.seal_eta_seal,
                     "seal_max_scale": args.seal_max_scale,
