@@ -69,6 +69,44 @@ gh run list --repo tedshachtman/activation-writing --workflow modal-benchmark.ym
 gh run watch --repo tedshachtman/activation-writing
 ```
 
+## Run From Codex Cloud Without `gh`
+
+Codex cloud containers may not have a git remote or the `gh` CLI. Use the
+standard-library launcher instead:
+
+```bash
+python scripts/cloud_modal.py doctor
+```
+
+If the cloud environment has `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET`, run
+Modal directly from the checkout:
+
+```bash
+python scripts/cloud_modal.py smoke --backend direct
+python scripts/cloud_modal.py preset --backend direct --preset qrico_key16 --tag cloud_qrico_key16
+```
+
+If the cloud environment has `GH_TOKEN`, `GITHUB_TOKEN`, or `GITHUB_PAT`, but
+not Modal secrets, dispatch the GitHub Actions workflow. The workflow receives
+the repo's Modal secrets:
+
+```bash
+python scripts/cloud_modal.py smoke --backend workflow
+python scripts/cloud_modal.py preset --backend workflow --preset qrico_key16 --tag cloud_qrico_key16
+```
+
+`--backend auto` picks direct Modal when Modal secrets are present, otherwise
+GitHub workflow dispatch when a GitHub token is present:
+
+```bash
+python scripts/cloud_modal.py preset --preset qrico_key16 --tag cloud_qrico_key16
+```
+
+There is one hard boundary: GitHub repo secrets are not exposed to arbitrary
+Codex cloud shells. They are only injected into GitHub Actions jobs. A normal
+cloud shell therefore needs either Modal env vars for direct runs or a GitHub
+token for workflow dispatch.
+
 ## One-Time Setup In Codex Cloud
 
 From the repository root:
