@@ -173,6 +173,7 @@ def parse_args() -> argparse.Namespace:
             "orca_karp",
             "qrico",
             "prism_q",
+            "tdmi_q",
             "trace_q",
             "spectra",
             "seal_qrico",
@@ -240,6 +241,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--qrico-layer-evidence-min", type=float, default=0.03)
     parser.add_argument("--qrico-layer-evidence-target", type=float, default=0.20)
     parser.add_argument("--qrico-disable-layer-trust", action="store_true")
+    parser.add_argument("--tdmi-object-endpoints", type=int, default=8)
+    parser.add_argument("--tdmi-ambient-endpoints", type=int, default=16)
+    parser.add_argument("--tdmi-object-rank", type=int, default=8)
+    parser.add_argument("--tdmi-ambient-rank", type=int, default=16)
+    parser.add_argument("--tdmi-horizon", type=int, default=4)
+    parser.add_argument("--tdmi-trust-temperature", type=float, default=0.5)
+    parser.add_argument("--tdmi-trust-threshold", type=float, default=0.0)
+    parser.add_argument("--tdmi-trust-floor", type=float, default=0.15)
+    parser.add_argument("--tdmi-disable-future", action="store_true")
     parser.add_argument("--prism-horizon", type=int, default=4)
     parser.add_argument("--prism-signal-rank", type=int, default=16)
     parser.add_argument("--prism-hazard-rank", type=int, default=16)

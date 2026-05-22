@@ -7039,3 +7039,95 @@ The fastest useful ladder is now:
 3. require `>=2/4` task0, `0` c2w, and drop `<1.0` before a full run;
 4. if revisiting TRACE, implement actual downstream VJP/frozen-attention
    transport rather than another local LM-head contrast sketch.
+
+## 2026-05-22: TDMI-Q Hidden-Manifold Row Weighting Failed Fast Gate
+
+5.5 Pro proposed TDMI-Q: keep the Q-RICO/key16 high-rank residual scaffold, but
+score each selected relational row by where its proposed effect is transported
+in the same-pass hidden trajectory. The intended full version uses exact VJP
+rows through the frozen downstream stack. The implementation here is a fast
+hidden-manifold proxy, not full exact transport:
+
+- added `--intrinsic-target-purifier tdmi_q`;
+- computed a preliminary Q-RICO residual-filter update;
+- row effect: `u_i = k_i @ update.T`;
+- object basis from high-weight selected targets, row effects, current hidden
+  states at selected object tokens, and optional downstream captured hidden
+  states at the same tokens;
+- ambient/default basis from low-surprise same-pass hidden states plus
+  low-norm downstream captured hidden rows;
+- ambient basis residualized against the object basis;
+- row trust:
+  `floor + (1-floor) * sigmoid((log signal - log ambient - threshold) / temp)`;
+- reweighted the original positive row weights by TDMI trust, recomputed the
+  protected update, then ran Q-RICO residual filtering with the TDMI weights;
+- added fast presets `tdmi_q_fast` and `tdmi_q_local_fast`.
+
+Verification:
+
+```bash
+python -m py_compile caic/intrinsic_surprise.py \
+  scripts/minilang_write.py \
+  scripts/minilang_intrinsic_continual.py \
+  scripts/continual_benchmark_grid.py \
+  tests/test_intrinsic_surprise.py
+python -m pytest tests/test_intrinsic_surprise.py::test_tdmi_q_trusts_object_transport_over_default_manifold -q
+# 1 passed
+```
+
+All TDMI runs used the same reduced split as the TRACE fast gate:
+
+- sentinel before: `12/25`, mean margin `0.712`;
+- Lyran baseline `1/4`, context `4/4`;
+- Vomar baseline `1/4`, context `4/4`;
+- layers `4,8,12,16,20,24,27`;
+- weak input/output protection stack `256/20`, `256/10`;
+- no old-key negatives, old atoms, Fisher sidecar, or external state.
+
+### Fast Diagnostic Results
+
+| Preset | TDMI settings | Task0 edited | Task0 delta | Sentinel c2w | w2c | Before-correct drop | Sentinel acc delta |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `qrico_key16_fast` | control | `2/4` | `+1/4` | `3` | `1` | `2.999` | `-0.08` |
+| `tdmi_q_fast` | future hidden rows, threshold `0`, floor `.15` | `3/4` | `+2/4` | `3` | `1` | `2.404` | `-0.08` |
+| `tdmi_q_local_fast` | current-layer only, threshold `0`, floor `.15` | `3/4` | `+2/4` | `1` | `3` | `1.725` | `+0.08` |
+| `tdmi_q_tuned_local_strict` | current-layer only, threshold `1.0`, floor `.05`, temp `.35` | `1/4` | `0` | `1` | `2` | `1.012` | `+0.04` |
+| `tdmi_q_tuned_local_hard` | current-layer only, threshold `1.5`, floor `.02`, temp `.35` | `1/4` | `0` | `1` | `2` | `1.269` | `+0.04` |
+| `tdmi_q_tuned_future_strict` | future hidden rows, threshold `1.0`, floor `.05`, temp `.35` | `2/4` | `+1/4` | `2` | `2` | `1.792` | `0.00` |
+
+TDMI diagnostics:
+
+- `tdmi_q_fast` kept mean signal fraction `0.956` and ambient fraction `0.773`;
+- `tdmi_q_local_fast` kept mean signal fraction `0.900` and ambient fraction
+  `0.673`;
+- strict local TDMI reduced ambient kept fraction to `0.492`, but acquisition
+  collapsed to baseline and c2w remained `1`;
+- hard local TDMI reduced ambient kept fraction to `0.369`, but again stayed
+  at baseline with c2w `1`.
+
+Interpretation:
+
+TDMI hidden-manifold row weighting found a more acquisition-positive row
+ranking than local TRACE: loose TDMI reached `3/4` on task0. But the ranking is
+not sentinel-safe. Tightening the trust gate behaves like previous shrink
+coordinates: acquisition disappears before the last c2w is removed. The future
+hidden-state proxy was worse than the local-only proxy on this split, which is
+evidence against the current cheap transport approximation.
+
+This does not falsify exact downstream VJP transport. It does falsify the
+implemented TDMI proxy as a fast frontier move. Do not promote `tdmi_q` to the
+full benchmark without replacing the proxy with materially more faithful
+transport, and do not treat hidden-state row weighting alone as the missing
+allocation mechanism.
+
+Current implication:
+
+- Q-RICO/key16 remains the practical single-task safe frontier.
+- On the reduced two-task gate, every acquisition-positive method so far is
+  sentinel-unsafe.
+- Every safety coordinate that reduces c2w toward zero has collapsed task0 back
+  to baseline on this fast split.
+- The next useful proposal should either implement exact downstream transport
+  with a clear causal falsifier, or shift away from row/atom/output-filtering
+  toward an allocation mechanism that preserves the threshold-crossing
+  component without using old sidecar state.

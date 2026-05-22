@@ -35,6 +35,7 @@ from caic.intrinsic_surprise import (
     project_rows_away_from_basis,
     qrico_purify_update,
     seal_qrico_purify_update,
+    tdmi_q_transport_scores,
     trace_q_purify_update,
     select_intrinsic_compatibility_residual_write,
     select_intrinsic_conditional_relation_innovation_write,
@@ -2377,6 +2378,7 @@ def parse_args() -> argparse.Namespace:
             "orca_karp",
             "qrico",
             "prism_q",
+            "tdmi_q",
             "trace_q",
             "spectra",
             "seal_qrico",
@@ -2444,6 +2446,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--qrico-layer-evidence-min", type=float, default=0.03)
     parser.add_argument("--qrico-layer-evidence-target", type=float, default=0.20)
     parser.add_argument("--qrico-disable-layer-trust", action="store_true")
+    parser.add_argument("--tdmi-object-endpoints", type=int, default=8)
+    parser.add_argument("--tdmi-ambient-endpoints", type=int, default=16)
+    parser.add_argument("--tdmi-object-rank", type=int, default=8)
+    parser.add_argument("--tdmi-ambient-rank", type=int, default=16)
+    parser.add_argument("--tdmi-horizon", type=int, default=4)
+    parser.add_argument("--tdmi-trust-temperature", type=float, default=0.5)
+    parser.add_argument("--tdmi-trust-threshold", type=float, default=0.0)
+    parser.add_argument("--tdmi-trust-floor", type=float, default=0.15)
+    parser.add_argument("--tdmi-disable-future", action="store_true")
     parser.add_argument("--prism-horizon", type=int, default=4)
     parser.add_argument("--prism-signal-rank", type=int, default=16)
     parser.add_argument("--prism-hazard-rank", type=int, default=16)
@@ -3119,6 +3130,7 @@ def run_intrinsic_surprise_writes(
             "orca_karp",
             "qrico",
             "prism_q",
+            "tdmi_q",
             "trace_q",
             "spectra",
             "seal_qrico",
@@ -3129,7 +3141,7 @@ def run_intrinsic_surprise_writes(
                 int(args.sharp_signal_top_k)
                 if args.intrinsic_target_purifier == "sharp_karp"
                 else int(args.qrico_option_sketch_rank)
-                if args.intrinsic_target_purifier in {"qrico", "seal_qrico"}
+                if args.intrinsic_target_purifier in {"qrico", "seal_qrico", "tdmi_q"}
                 else int(args.prism_option_top_k)
                 if args.intrinsic_target_purifier == "prism_q"
                 else int(args.trace_option_top_k)
@@ -3730,6 +3742,140 @@ def run_intrinsic_surprise_writes(
                     stats.negative_rmse = float(torch.sqrt(torch.mean(neg_fit.square())).item())
                 if selection.diagnostics is None:
                     selection.diagnostics = {}
+                selection.diagnostics.update(qrico.diagnostics)
+            elif args.intrinsic_target_purifier == "tdmi_q":
+                preliminary_qrico = qrico_purify_update(
+                    update,
+                    keys=selection.keys,
+                    targets=targets,
+                    weights=positive_weights,
+                    all_keys=usable_keys,
+                    all_outputs=captures[layer_idx].outputs[: usable_keys.shape[0]],
+                    token_indices=selection.token_indices,
+                    logit_top_values=sharp_top_values,
+                    logit_top_indices=sharp_top_indices,
+                    lm_head_indices=sharp_lm_indices,
+                    lm_head_rows=sharp_lm_rows,
+                    layer=layer,
+                    negative_keys=negative_keys,
+                    output_basis=karp_output_basis,
+                    deflate_key_rank=args.qrico_deflate_key_rank,
+                    deflate_value_rank=args.qrico_deflate_value_rank,
+                    rank=args.qrico_rank,
+                    option_sketch_rank=args.qrico_option_sketch_rank,
+                    target_parallel_rank=args.qrico_target_parallel_rank,
+                    scramble_weight=args.qrico_scramble_weight,
+                    residual_row_weight_power=args.qrico_residual_row_weight_power,
+                    quotient_mode=args.qrico_quotient_mode,
+                    solve_mode=args.qrico_solve_mode,
+                    low_surprise_quantile=args.karp_low_surprise_quantile,
+                    negative_weight=args.intrinsic_surprise_input_penalty_weight,
+                    output_weight=args.intrinsic_surprise_output_penalty_weight,
+                    cca_ridge=args.qrico_cca_ridge,
+                    layer_evidence_min=args.qrico_layer_evidence_min,
+                    layer_evidence_target=args.qrico_layer_evidence_target,
+                    apply_layer_trust=not args.qrico_disable_layer_trust,
+                    risk_ratio_cap=args.karp_risk_ratio_cap,
+                )
+                future_outputs_by_layer = {
+                    future_idx: future_capture.outputs[: usable_keys.shape[0]]
+                    for future_idx, future_capture in captures.items()
+                    if future_capture.outputs.shape[0] >= usable_keys.shape[0]
+                }
+                tdmi = tdmi_q_transport_scores(
+                    preliminary_qrico.update,
+                    keys=selection.keys,
+                    targets=targets,
+                    weights=positive_weights,
+                    all_keys=usable_keys,
+                    all_outputs=captures[layer_idx].outputs[: usable_keys.shape[0]],
+                    token_indices=selection.token_indices,
+                    layer=layer,
+                    future_outputs_by_layer=future_outputs_by_layer,
+                    layer_idx=layer_idx,
+                    object_endpoints=args.tdmi_object_endpoints,
+                    ambient_endpoints=args.tdmi_ambient_endpoints,
+                    object_rank=args.tdmi_object_rank,
+                    ambient_rank=args.tdmi_ambient_rank,
+                    horizon=args.tdmi_horizon,
+                    low_surprise_quantile=args.karp_low_surprise_quantile,
+                    trust_temperature=args.tdmi_trust_temperature,
+                    trust_threshold=args.tdmi_trust_threshold,
+                    trust_floor=args.tdmi_trust_floor,
+                    use_future_outputs=not args.tdmi_disable_future,
+                )
+                tdmi_weights = positive_weights.detach().float().cpu() * tdmi.row_trust
+                if use_metric_solve:
+                    tdmi_base_update, tdmi_stats = protected_metric_update(
+                        selection.keys,
+                        targets,
+                        negative_keys=negative_keys,
+                        output_penalty_basis=output_penalty_basis,
+                        positive_weights=tdmi_weights,
+                        ridge=args.ridge,
+                        negative_weight=args.intrinsic_surprise_input_penalty_weight,
+                        output_penalty_weight=args.intrinsic_surprise_output_penalty_weight,
+                        eta=args.eta,
+                        max_update_norm=args.max_update_norm,
+                    )
+                else:
+                    tdmi_base_update, tdmi_stats = protected_ridge_update(
+                        selection.keys,
+                        targets,
+                        negative_keys=negative_keys,
+                        positive_weights=tdmi_weights,
+                        ridge=args.ridge,
+                        negative_weight=args.intrinsic_surprise_input_penalty_weight,
+                        eta=args.eta,
+                        max_update_norm=args.max_update_norm,
+                    )
+                qrico = qrico_purify_update(
+                    tdmi_base_update,
+                    keys=selection.keys,
+                    targets=targets,
+                    weights=tdmi_weights,
+                    all_keys=usable_keys,
+                    all_outputs=captures[layer_idx].outputs[: usable_keys.shape[0]],
+                    token_indices=selection.token_indices,
+                    logit_top_values=sharp_top_values,
+                    logit_top_indices=sharp_top_indices,
+                    lm_head_indices=sharp_lm_indices,
+                    lm_head_rows=sharp_lm_rows,
+                    layer=layer,
+                    negative_keys=negative_keys,
+                    output_basis=karp_output_basis,
+                    deflate_key_rank=args.qrico_deflate_key_rank,
+                    deflate_value_rank=args.qrico_deflate_value_rank,
+                    rank=args.qrico_rank,
+                    option_sketch_rank=args.qrico_option_sketch_rank,
+                    target_parallel_rank=args.qrico_target_parallel_rank,
+                    scramble_weight=args.qrico_scramble_weight,
+                    residual_row_weight_power=args.qrico_residual_row_weight_power,
+                    quotient_mode=args.qrico_quotient_mode,
+                    solve_mode=args.qrico_solve_mode,
+                    low_surprise_quantile=args.karp_low_surprise_quantile,
+                    negative_weight=args.intrinsic_surprise_input_penalty_weight,
+                    output_weight=args.intrinsic_surprise_output_penalty_weight,
+                    cca_ridge=args.qrico_cca_ridge,
+                    layer_evidence_min=args.qrico_layer_evidence_min,
+                    layer_evidence_target=args.qrico_layer_evidence_target,
+                    apply_layer_trust=not args.qrico_disable_layer_trust,
+                    risk_ratio_cap=args.karp_risk_ratio_cap,
+                )
+                update = qrico.update
+                stats = tdmi_stats
+                fit = selection.keys.detach().float() @ update.T
+                stats.fit_rmse = float(torch.sqrt(torch.mean((fit - targets.detach().float()).square())).item())
+                stats.update_fro = float(torch.linalg.vector_norm(update).item())
+                if negative_keys is not None and negative_keys.numel() > 0:
+                    neg_fit = negative_keys.detach().float() @ update.T
+                    stats.negative_rmse = float(torch.sqrt(torch.mean(neg_fit.square())).item())
+                if selection.diagnostics is None:
+                    selection.diagnostics = {}
+                selection.diagnostics.update(
+                    {f"tdmi_pre_{key}": value for key, value in preliminary_qrico.diagnostics.items()}
+                )
+                selection.diagnostics.update(tdmi.diagnostics)
                 selection.diagnostics.update(qrico.diagnostics)
             elif args.intrinsic_target_purifier == "prism_q":
                 future_outputs_by_layer = {

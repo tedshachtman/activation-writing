@@ -18,6 +18,7 @@ from caic.intrinsic_surprise import (
     ocep_purify_update,
     prism_q_purify_update,
     qrico_purify_update,
+    tdmi_q_transport_scores,
     trace_q_purify_update,
     select_intrinsic_associative_binding_write,
     select_intrinsic_compatibility_residual_write,
@@ -1389,6 +1390,71 @@ def test_trace_q_keeps_object_contrast_and_shrinks_ambient_collateral():
     assert useful_ratio > hazard_ratio
     assert result.diagnostics["trace_q_collateral_after"] < result.diagnostics["trace_q_collateral_before"]
     assert result.diagnostics["trace_q_object_rank"] >= 1
+
+
+def test_tdmi_q_trusts_object_transport_over_default_manifold():
+    update = torch.zeros(3, 4)
+    update[0, 2] = 2.0  # object row effect
+    update[1, 0] = 2.0  # default row effect
+    keys = torch.tensor(
+        [
+            [0.0, 0.0, 3.0, 0.0],
+            [0.0, 0.0, 4.0, 0.0],
+            [3.0, 0.0, 0.0, 0.0],
+            [4.0, 0.0, 0.0, 0.0],
+        ]
+    )
+    targets = torch.tensor(
+        [
+            [4.0, 0.0, 0.0],
+            [5.0, 0.0, 0.0],
+            [0.0, 4.0, 0.0],
+            [0.0, 5.0, 0.0],
+        ]
+    )
+    all_keys = keys.clone()
+    all_outputs = torch.tensor(
+        [
+            [1.0, 0.0, 0.0],
+            [1.2, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 1.2, 0.0],
+        ]
+    )
+    future = {
+        1: torch.tensor(
+            [
+                [2.0, 0.0, 0.0],
+                [2.2, 0.0, 0.0],
+                [0.0, 2.0, 0.0],
+                [0.0, 2.2, 0.0],
+            ]
+        )
+    }
+
+    result = tdmi_q_transport_scores(
+        update,
+        keys=keys,
+        targets=targets,
+        weights=torch.tensor([10.0, 9.0, 1.0, 1.0]),
+        all_keys=all_keys,
+        all_outputs=all_outputs,
+        token_indices=torch.tensor([0, 1, 2, 3]),
+        future_outputs_by_layer=future,
+        layer_idx=0,
+        object_endpoints=2,
+        ambient_endpoints=2,
+        object_rank=1,
+        ambient_rank=1,
+        horizon=1,
+        trust_temperature=0.25,
+        trust_floor=0.05,
+    )
+
+    assert result.row_trust[:2].mean() > result.row_trust[2:].mean()
+    assert result.row_signal[:2].mean() > result.row_ambient[:2].mean()
+    assert result.row_ambient[2:].mean() > result.row_signal[2:].mean()
+    assert result.diagnostics["tdmi_q_object_rank"] >= 1
 
 
 def test_feature_birth_creates_closed_form_trigger_on_low_impact_neuron():

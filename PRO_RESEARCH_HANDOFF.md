@@ -1,4 +1,4 @@
-# Request For GPT-5.5 Pro: One-Pass Surprise Consolidation After TRACE-Q Fast Falsifier
+# Request For GPT-5.5 Pro: One-Pass Surprise Consolidation After TDMI-Q Fast Falsifier
 
 Date: 2026-05-22
 
@@ -9,11 +9,157 @@ Audience: GPT-5.5 Pro. I am giving you two files:
 2. This file: the current prompt/request. Please read the full research log
    first, then answer this prompt.
 
+## 2026-05-22 Update: TDMI-Q Hidden-Manifold Row Weighting Failed Fast Gate
+
+Please treat this update as the current live state. The older TRACE-Q, PRISM-Q,
+and SEAL-Q sections below are retained for continuity, and the full research
+log is attached separately.
+
+Your latest TDMI-Q direction was implemented in a cheap first-pass form and
+tested on the reduced two-task + expanded-sentinel fast gate. It did **not**
+pass the gate.
+
+Important caveat:
+
+This is not exact downstream-VJP TDMI-Q. It used same-pass hidden-state
+transport proxies: current-layer and captured downstream hidden rows at object
+and ambient token positions. It did not form exact `J_{l->e}`, exact RMSNorm or
+attention VJPs, or a true frozen-stack tangent transport.
+
+Implementation added:
+
+- `--intrinsic-target-purifier tdmi_q`;
+- preliminary Q-RICO residual-filter update;
+- row effect `u_i = k_i @ update.T`;
+- object basis from high-weight selected targets, row effects, current hidden
+  states at selected tokens, and optionally downstream captured hidden states;
+- ambient/default basis from low-surprise same-pass hidden states and low-norm
+  downstream hidden rows;
+- ambient basis residualized against the object basis;
+- row trust
+  `floor + (1-floor) * sigmoid((log signal - log ambient - threshold) / temp)`;
+- reweighted row weights followed by the normal protected ridge + Q-RICO
+  residual filtering path;
+- fast presets `tdmi_q_fast` and `tdmi_q_local_fast`.
+
+Verification:
+
+```text
+targeted TDMI synthetic test passed
+py_compile passed for modified implementation files
+```
+
+### Fast Gate Setup
+
+Same reduced fixture as the TRACE fast gate:
+
+- Qwen/Qwen3-1.7B;
+- two tasks: Lyran then Vomar;
+- 6 lessons/task, 8 examples/lesson;
+- teacher-filtered 4-question eval per task from 40 candidates;
+- representative layers `4,8,12,16,20,24,27`;
+- `relational_aggregate`, context-value, final-aligned;
+- key feature top-k `16`;
+- target scale `.10`;
+- output/input weak stack `256/10`, `256/20`;
+- expanded sentinel suite;
+- early-stop after task0 if sentinel c2w is nonzero or task0 edited correct is
+  below `1/4`;
+- no old-key negatives, no old atoms, no Fisher/sketch sidecar state.
+
+Fast split baseline:
+
+- sentinel before: `12/25`, mean margin `0.712`;
+- Lyran baseline `1/4`, context `4/4`;
+- Vomar baseline `1/4`, context `4/4`.
+
+### Fast Results
+
+| Preset | TDMI settings | Task0 edited | Task0 delta | Sentinel c2w | w2c | Before-correct drop | Sentinel acc delta |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `qrico_key16_fast` | control | `2/4` | `+1/4` | `3` | `1` | `2.999` | `-0.08` |
+| `tdmi_q_fast` | future hidden rows, threshold `0`, floor `.15` | `3/4` | `+2/4` | `3` | `1` | `2.404` | `-0.08` |
+| `tdmi_q_local_fast` | current-layer only, threshold `0`, floor `.15` | `3/4` | `+2/4` | `1` | `3` | `1.725` | `+0.08` |
+| `tdmi_q_tuned_local_strict` | current-layer only, threshold `1.0`, floor `.05`, temp `.35` | `1/4` | `0` | `1` | `2` | `1.012` | `+0.04` |
+| `tdmi_q_tuned_local_hard` | current-layer only, threshold `1.5`, floor `.02`, temp `.35` | `1/4` | `0` | `1` | `2` | `1.269` | `+0.04` |
+| `tdmi_q_tuned_future_strict` | future hidden rows, threshold `1.0`, floor `.05`, temp `.35` | `2/4` | `+1/4` | `2` | `2` | `1.792` | `0.00` |
+
+Diagnostics:
+
+- loose TDMI was more acquisition-positive than TRACE-local: `3/4` task0;
+- future hidden-row TDMI did not improve safety over the Q-RICO control
+  (`3` c2w);
+- local-only TDMI was less unsafe (`1` c2w), but still failed the zero-c2w
+  gate;
+- stricter local TDMI reduced the ambient kept fraction from `0.673` to
+  `0.492` or `0.369`, but task0 collapsed to baseline and c2w remained `1`.
+
+Interpretation:
+
+TDMI hidden-manifold row weighting is informative but not a frontier move. It
+found acquisition-positive rows, but the same row trust coordinate still does
+not isolate sentinel-safe threshold-crossing updates. Tightening the trust gate
+repeats the familiar pattern: acquisition disappears before c2w reaches zero.
+The cheap future hidden-state transport proxy was worse than local-only on this
+split.
+
+This does **not** fully falsify exact downstream VJP transport. It does falsify
+the implemented TDMI proxy as the next practical step.
+
+### Current Live State
+
+The current practical baseline remains Q-RICO/key16:
+
+- known full single-task safe frontier: `5/20`, context captures `11/20`,
+  centered cosine `0.578`, projection ratio `0.162`, sentinel c2w `0`,
+  before-correct drop `0.964`;
+- reduced two-task fast fixture: acquisition-positive (`2/4`) but unsafe
+  (`3` c2w);
+- loose TDMI improves fast acquisition to `3/4` but remains unsafe;
+- strict TDMI/TRACE/PRISM-style filters collapse acquisition before solving
+  c2w;
+- two-task full benchmark remains the primary target.
+
+The high-level goal and hard constraints are unchanged:
+
+- one forward pass over the lesson/context;
+- closed-form write;
+- surprise/innovation/free-energy driven;
+- all-layer compatible;
+- no null prompts, quizzes, answer traces, labels, probes, SAE, RAG, router;
+- no sidecar state across sessions after weights are written;
+- primary benchmark is two-task continual learning plus sentinel preservation,
+  not single-task frontier chasing.
+
+### New Ask
+
+Please propose the next implementable mathematical tool.
+
+It must be specific enough to implement: tensors, objectives, closed-form solve,
+required diagnostics, first runs, ablations, and falsification criteria.
+
+Please address:
+
+1. TDMI loose row weighting improves fast acquisition (`3/4`) but is unsafe;
+   strict TDMI collapses acquisition before eliminating the last c2w. What
+   allocation object should replace row trust?
+2. PRISM strict, TRACE-local, and TDMI all reduced their measured hazards but
+   did not solve real sentinel c2w. Is exact downstream tangent transport still
+   worth implementing, or do these failures imply that transported readout
+   quotients are the wrong family?
+3. Should we now improve acquisition from the known safe Q-RICO full
+   single-task point, or keep trying to purify acquisition-positive reduced
+   two-task maps?
+4. Under the no-sidecar rule, is robust two-task retention identifiable from
+   only current weights and a new context pass? If not, state the minimal
+   additional assumption that still respects merged-weight consolidation.
+5. What is the fastest diagnostic ladder before promoting a method to the full
+   two-task benchmark?
+
 ## 2026-05-22 Update: TRACE-Q Local Approximation Failed Fast Gate
 
-Please treat this update as the current live state. The older PRISM-Q and
-SEAL-Q sections below are retained for continuity, and the full research log is
-attached separately.
+This older section is retained for continuity. The TDMI-Q section above is the
+current live state.
 
 Your latest TRACE-Q direction was implemented in a cheap first-pass form and
 tested on the reduced two-task + expanded-sentinel fast gate. It did **not**

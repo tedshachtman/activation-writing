@@ -161,6 +161,25 @@ class TraceQResult:
 
 
 @dataclass
+class TdmiQResult:
+    """TDMI-Q transported/default-manifold row scores.
+
+    ``row_trust`` is one multiplicative weight per selected relational row.
+    The first implementation uses same-pass hidden-state transport proxies
+    rather than exact downstream VJPs: rows are trusted when their proposed
+    residual effect lies more in transported object/default-separated hidden
+    manifolds than in low-surprise default manifolds.
+    """
+
+    row_trust: torch.Tensor
+    row_signal: torch.Tensor
+    row_ambient: torch.Tensor
+    object_basis: torch.Tensor
+    ambient_basis: torch.Tensor
+    diagnostics: dict[str, float]
+
+
+@dataclass
 class OcepPurificationResult:
     """OCEP-purified update plus diagnostics.
 
@@ -3846,6 +3865,205 @@ def trace_q_purify_update(
         object_basis=object_basis.contiguous(),
         ambient_basis=ambient_basis.contiguous(),
         generic_basis=generic_basis.contiguous(),
+        diagnostics=diagnostics,
+    )
+
+
+def tdmi_q_transport_scores(
+    update: torch.Tensor,
+    *,
+    keys: torch.Tensor,
+    targets: torch.Tensor,
+    weights: torch.Tensor,
+    all_keys: torch.Tensor,
+    all_outputs: torch.Tensor,
+    token_indices: torch.Tensor,
+    layer: nn.Module | None = None,
+    future_outputs_by_layer: dict[int, torch.Tensor] | None = None,
+    layer_idx: int = 0,
+    object_endpoints: int = 8,
+    ambient_endpoints: int = 16,
+    object_rank: int = 8,
+    ambient_rank: int = 16,
+    horizon: int = 4,
+    low_surprise_quantile: float = 0.35,
+    trust_temperature: float = 0.5,
+    trust_threshold: float = 0.0,
+    trust_floor: float = 0.15,
+    use_future_outputs: bool = True,
+    eps: float = 1e-6,
+) -> TdmiQResult:
+    """Score selected rows by transported object/default hidden manifolds.
+
+    This is the fast TDMI-Q row-scoring primitive.  It keeps Q-RICO's proposed
+    high-rank update intact, computes each selected row's proposed residual
+    effect ``u_i = k_i update.T``, and assigns trust based on whether ``u_i``
+    lies in object/innovation hidden-state manifolds rather than low-surprise
+    default hidden manifolds.  ``future_outputs_by_layer`` provides a cheap
+    same-pass transport proxy by pooling hidden states at the same token
+    indices in downstream layers.  Exact VJP transport is intentionally left as
+    a stricter future mode.
+    """
+
+    update_f = torch.nan_to_num(update.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    k = torch.nan_to_num(keys.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    y = torch.nan_to_num(targets.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    w = torch.nan_to_num(weights.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+    all_k = torch.nan_to_num(all_keys.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    all_y = torch.nan_to_num(all_outputs.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    tok = token_indices.detach().cpu().long()
+
+    if update_f.ndim != 2:
+        raise ValueError(f"update must be [d,m], got {tuple(update_f.shape)}")
+    d_model, d_ff = update_f.shape
+    if k.ndim != 2 or k.shape[1] != d_ff or y.ndim != 2 or y.shape[1] != d_model or k.shape[0] != y.shape[0]:
+        raise ValueError("TDMI-Q keys/targets do not match update shape")
+    if w.ndim != 1 or w.shape[0] != k.shape[0]:
+        raise ValueError(f"TDMI-Q weights must be [{k.shape[0]}], got {tuple(w.shape)}")
+    if all_k.ndim != 2 or all_k.shape[1] != d_ff or all_y.ndim != 2 or all_y.shape[1] != d_model:
+        raise ValueError("TDMI-Q all_keys/all_outputs do not match update shape")
+    if tok.numel() != k.shape[0]:
+        raise ValueError("TDMI-Q token_indices must align with selected rows")
+
+    diagnostics: dict[str, float] = {
+        "tdmi_q_enabled": 1.0,
+        "tdmi_q_update_fro_before": float(torch.linalg.vector_norm(update_f).item()),
+    }
+    if k.shape[0] == 0 or float(torch.linalg.vector_norm(update_f).item()) <= 1e-12:
+        trust = torch.ones(k.shape[0], dtype=torch.float32)
+        diagnostics["tdmi_q_fallback"] = 1.0
+        return TdmiQResult(
+            row_trust=trust,
+            row_signal=torch.zeros_like(trust),
+            row_ambient=torch.zeros_like(trust),
+            object_basis=torch.empty(0, d_model),
+            ambient_basis=torch.empty(0, d_model),
+            diagnostics=diagnostics,
+        )
+
+    def cap_rows(rows: torch.Tensor, max_rows: int) -> torch.Tensor:
+        if rows.shape[0] <= max_rows or max_rows <= 0:
+            return rows
+        idx = torch.linspace(0, rows.shape[0] - 1, steps=max_rows).round().long().unique()
+        return rows[idx]
+
+    row_scores = _token_row_surprise(all_k, layer)
+    low_q = min(max(float(low_surprise_quantile), 0.0), 1.0)
+    threshold = torch.quantile(row_scores, low_q)
+    low_mask = row_scores <= threshold
+    if int(low_mask.sum().item()) < 2:
+        low_mask = row_scores <= row_scores.median()
+    low_idx = torch.nonzero(low_mask, as_tuple=False).flatten()
+
+    w_rank = torch.argsort(w, descending=True)
+    object_row_idx = w_rank[: max(1, min(int(object_endpoints), w_rank.numel()))]
+    object_tokens = tok[object_row_idx].clamp(min=0, max=max(all_y.shape[0] - 1, 0))
+    ambient_tokens = low_idx[: max(1, min(int(ambient_endpoints), low_idx.numel()))].clamp(
+        min=0,
+        max=max(all_y.shape[0] - 1, 0),
+    )
+    if ambient_tokens.numel() > 0 and object_tokens.numel() > 0:
+        object_set = set(int(v) for v in object_tokens.flatten().tolist())
+        ambient_tokens = torch.tensor(
+            [int(v) for v in ambient_tokens.flatten().tolist() if int(v) not in object_set],
+            dtype=torch.long,
+        )
+
+    object_parts: list[torch.Tensor] = [
+        y[object_row_idx],
+        (k @ update_f.T)[object_row_idx],
+        all_y[object_tokens] if object_tokens.numel() > 0 else torch.empty(0, d_model),
+    ]
+    ambient_parts: list[torch.Tensor] = [
+        all_y[ambient_tokens] if ambient_tokens.numel() > 0 else torch.empty(0, d_model)
+    ]
+    if use_future_outputs and future_outputs_by_layer:
+        max_future = int(layer_idx) + max(0, int(horizon))
+        for future_idx in sorted(future_outputs_by_layer):
+            if future_idx < int(layer_idx) or future_idx > max_future:
+                continue
+            future = torch.nan_to_num(
+                future_outputs_by_layer[future_idx].detach().float().cpu(),
+                nan=0.0,
+                posinf=0.0,
+                neginf=0.0,
+            )
+            if future.ndim != 2 or future.shape[1] != d_model or future.shape[0] == 0:
+                continue
+            if object_tokens.numel() > 0:
+                object_parts.append(future[object_tokens.clamp(max=future.shape[0] - 1)])
+            if ambient_tokens.numel() > 0:
+                ambient_parts.append(future[ambient_tokens.clamp(max=future.shape[0] - 1)])
+            keep = min(max(1, int(ambient_endpoints)), future.shape[0])
+            future_norms = torch.linalg.vector_norm(future, dim=1)
+            ambient_parts.append(future[torch.topk(future_norms, k=keep, largest=False).indices])
+
+    object_rows = torch.cat([part for part in object_parts if part.numel() > 0], dim=0)
+    ambient_rows = torch.cat([part for part in ambient_parts if part.numel() > 0], dim=0)
+    object_basis = _fast_basis_with_rows(object_rows, max(1, int(object_rank)), d_model)
+    ambient_raw = _fast_basis_with_rows(ambient_rows, max(1, int(ambient_rank) * 2), d_model)
+    if object_basis.numel() > 0 and ambient_raw.numel() > 0:
+        ambient_rows_resid = ambient_raw - (ambient_raw @ object_basis.T) @ object_basis
+    else:
+        ambient_rows_resid = ambient_raw
+    ambient_basis = _fast_basis_with_rows(ambient_rows_resid, max(1, int(ambient_rank)), d_model)
+
+    effects = torch.nan_to_num(k @ update_f.T, nan=0.0, posinf=0.0, neginf=0.0)
+    if object_basis.numel() == 0 or ambient_basis.numel() == 0:
+        trust = torch.ones(k.shape[0], dtype=torch.float32)
+        diagnostics["tdmi_q_fallback"] = 1.0
+        return TdmiQResult(
+            row_trust=trust,
+            row_signal=torch.zeros_like(trust),
+            row_ambient=torch.zeros_like(trust),
+            object_basis=object_basis.contiguous(),
+            ambient_basis=ambient_basis.contiguous(),
+            diagnostics=diagnostics,
+        )
+
+    row_signal = torch.linalg.vector_norm(effects @ object_basis.T, dim=1).square()
+    row_ambient = torch.linalg.vector_norm(effects @ ambient_basis.T, dim=1).square()
+    temp = max(float(trust_temperature), float(eps))
+    logits = (torch.log(row_signal + float(eps)) - torch.log(row_ambient + float(eps)) - float(trust_threshold)) / temp
+    floor = min(max(float(trust_floor), 0.0), 1.0)
+    row_trust = floor + (1.0 - floor) * torch.sigmoid(logits)
+
+    def safe_corr(a: torch.Tensor, b: torch.Tensor) -> float:
+        if a.numel() < 2 or b.numel() != a.numel():
+            return 0.0
+        aa = a.float() - a.float().mean()
+        bb = b.float() - b.float().mean()
+        denom = torch.linalg.vector_norm(aa) * torch.linalg.vector_norm(bb)
+        if float(denom.item()) <= float(eps):
+            return 0.0
+        return float(((aa @ bb) / denom).item())
+
+    diagnostics.update(
+        {
+            "tdmi_q_fallback": 0.0,
+            "tdmi_q_object_rank": float(object_basis.shape[0]),
+            "tdmi_q_ambient_rank": float(ambient_basis.shape[0]),
+            "tdmi_q_object_endpoints": float(object_tokens.numel()),
+            "tdmi_q_ambient_endpoints": float(ambient_tokens.numel()),
+            "tdmi_q_horizon": float(horizon),
+            "tdmi_q_use_future_outputs": 1.0 if use_future_outputs else 0.0,
+            "tdmi_q_trust_mean": float(row_trust.mean().item()),
+            "tdmi_q_trust_min": float(row_trust.min().item()),
+            "tdmi_q_trust_max": float(row_trust.max().item()),
+            "tdmi_q_signal_mean": float(row_signal.mean().item()),
+            "tdmi_q_ambient_mean": float(row_ambient.mean().item()),
+            "tdmi_q_signal_kept_fraction": float(((row_trust * row_signal).sum() / row_signal.sum().clamp_min(float(eps))).item()),
+            "tdmi_q_ambient_kept_fraction": float(((row_trust * row_ambient).sum() / row_ambient.sum().clamp_min(float(eps))).item()),
+            "tdmi_q_trust_weight_corr": safe_corr(row_trust, w),
+            "tdmi_q_trust_effect_norm_corr": safe_corr(row_trust, torch.linalg.vector_norm(effects, dim=1)),
+        }
+    )
+    return TdmiQResult(
+        row_trust=row_trust.contiguous(),
+        row_signal=row_signal.contiguous(),
+        row_ambient=row_ambient.contiguous(),
+        object_basis=object_basis.contiguous(),
+        ambient_basis=ambient_basis.contiguous(),
         diagnostics=diagnostics,
     )
 
