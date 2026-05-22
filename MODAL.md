@@ -7,12 +7,16 @@ Modal volume at `/modal-runs`.
 
 ## Required Secrets
 
-Codex cloud needs Modal credentials in its environment:
+The GitHub repo has these Actions secrets set:
 
 ```bash
 MODAL_TOKEN_ID=...
 MODAL_TOKEN_SECRET=...
 ```
+
+Those are enough for the manual GitHub Actions workflow below. If you are
+running Modal directly from an interactive Codex cloud shell instead of through
+Actions, that shell also needs the same two environment variables.
 
 Create them locally with Modal if needed:
 
@@ -25,6 +29,45 @@ needed. The default Qwen/Qwen3-1.7B benchmark uses a public model.
 
 Do not commit `.modal/`, tokens, downloaded models, or run artifacts. The
 repository ignore rules and Modal mount filters exclude these by default.
+
+## Run From GitHub Actions
+
+Use the manual workflow when you want Codex cloud to launch Modal without
+handling Modal secrets directly.
+
+Smoke test:
+
+```bash
+gh workflow run modal-benchmark.yml \
+  --repo tedshachtman/activation-writing \
+  -f mode=smoke
+```
+
+Run the current safe baseline preset:
+
+```bash
+gh workflow run modal-benchmark.yml \
+  --repo tedshachtman/activation-writing \
+  -f mode=preset \
+  -f preset=qrico_key16 \
+  -f tag=cloud_qrico_key16
+```
+
+Run an arbitrary command through the generic Modal runner:
+
+```bash
+gh workflow run modal-benchmark.yml \
+  --repo tedshachtman/activation-writing \
+  -f mode=command \
+  -f command='python scripts/minilang_intrinsic_continual.py --help'
+```
+
+Watch the latest workflow run:
+
+```bash
+gh run list --repo tedshachtman/activation-writing --workflow modal-benchmark.yml --limit 1
+gh run watch --repo tedshachtman/activation-writing
+```
 
 ## One-Time Setup In Codex Cloud
 

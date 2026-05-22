@@ -1,0 +1,78 @@
+name: Modal Benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: What to run.
+        required: true
+        default: preset
+        type: choice
+        options:
+          - smoke
+          - preset
+          - command
+      preset:
+        description: Preset for scripts/continual_benchmark_grid.py when mode=preset.
+        required: false
+        default: qrico_key16
+      tag:
+        description: Output tag for preset runs.
+        required: false
+        default: gha
+      command:
+        description: Command to run through scripts/modal_caic_runner.py when mode=command.
+        required: false
+        default: python -m pytest -q
+
+jobs:
+  modal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+      MODE: ${{ inputs.mode }}
+      PRESET: ${{ inputs.preset }}
+      RUN_TAG: ${{ inputs.tag }}
+      MODAL_COMMAND: ${{ inputs.command }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package
+        run: python -m pip install -e ".[dev]"
+
+      - name: Verify Modal credentials
+        run: |
+          set -euo pipefail
+          test -n "${MODAL_TOKEN_ID:-}"
+          test -n "${MODAL_TOKEN_SECRET:-}"
+          modal profile current
+
+      - name: Run Modal job
+        run: |
+          set -euo pipefail
+          case "$MODE" in
+            smoke)
+              modal run scripts/modal_smoke.py
+              modal run scripts/modal_caic_runner.py --smoke
+              ;;
+            preset)
+              python scripts/continual_benchmark_grid.py \
+                --modal \
+                --run \
+                --preset "$PRESET" \
+                --tag "$RUN_TAG"
+              ;;
+            command)
+              modal run scripts/modal_caic_runner.py --command "$MODAL_COMMAND"
+              ;;
+            *)
+              echo "Unknown mode: $MODE" >&2
+              exit 2
+              ;;
+          esac
