@@ -55,6 +55,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-questions", type=int, default=8)
     parser.add_argument("--teacher-filter-eval", action="store_true")
     parser.add_argument("--teacher-filter-candidates", type=int, default=120)
+    parser.add_argument(
+        "--early-stop-c2w-over",
+        type=int,
+        default=-1,
+        help="Stop after a write/eval step if sentinel correct-to-wrong flips exceed this value. Negative disables.",
+    )
+    parser.add_argument(
+        "--early-stop-task0-min-edited-correct",
+        type=int,
+        default=-1,
+        help="Stop after task 0 if edited task-0 correct count is below this value. Negative disables.",
+    )
     parser.add_argument("--layers", nargs="+", type=int, default=list(range(28)))
     parser.add_argument("--ridge", type=float, default=1.0)
     parser.add_argument("--eta", type=float, default=1.0)
@@ -533,10 +545,14 @@ def main() -> None:
             row["sentinel_accuracy_delta"] = sentinel_after["accuracy"] - sentinel_before["accuracy"]
             row["sentinel_margin_delta"] = sentinel_after["mean_margin"] - sentinel_before["mean_margin"]
             add_sentinel_shift_metrics(row, sentinel_before, sentinel_after)
+            sentinel_c2w = int(row.get("sentinel_correct_to_wrong", 0))
             append_jsonl(metrics_path, row)
             for idx, detail in enumerate(sentinel_after["details"]):
                 append_jsonl(details_path, {"stage": "sentinel_after", "step": step, "idx": idx, **detail})
+        else:
+            sentinel_c2w = 0
 
+        task0_edited_correct: int | None = None
         for eval_task_idx in range(step + 1):
             progress(f"after task={step}, evaluating task={eval_task_idx}")
             eval_profile = profiles[eval_task_idx]
@@ -582,6 +598,39 @@ def main() -> None:
             append_jsonl(metrics_path, row)
             for idx, detail in enumerate(edited["details"]):
                 append_jsonl(details_path, {"stage": "edited", "step": step, "task_idx": eval_task_idx, "idx": idx, **detail})
+            if step == 0 and eval_task_idx == 0:
+                task0_edited_correct = int(edited["correct"])
+
+        should_stop = False
+        stop_reasons: list[str] = []
+        if args.early_stop_c2w_over >= 0 and sentinel_c2w > args.early_stop_c2w_over:
+            should_stop = True
+            stop_reasons.append(f"sentinel_c2w={sentinel_c2w}>{args.early_stop_c2w_over}")
+        if (
+            step == 0
+            and args.early_stop_task0_min_edited_correct >= 0
+            and task0_edited_correct is not None
+            and task0_edited_correct < args.early_stop_task0_min_edited_correct
+        ):
+            should_stop = True
+            stop_reasons.append(
+                f"task0_edited_correct={task0_edited_correct}<"
+                f"{args.early_stop_task0_min_edited_correct}"
+            )
+        if should_stop:
+            progress(f"early stopping after task={step}: {', '.join(stop_reasons)}")
+            append_jsonl(
+                metrics_path,
+                {
+                    "stage": "early_stop",
+                    "step": step,
+                    "seconds": time.time() - started,
+                    "reasons": stop_reasons,
+                    "sentinel_correct_to_wrong": sentinel_c2w,
+                    "task0_edited_correct": task0_edited_correct,
+                },
+            )
+            break
 
     clear_active_slot_weights(model)
     print(f"Wrote intrinsic continual metrics to {metrics_path}")

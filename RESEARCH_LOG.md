@@ -6844,3 +6844,96 @@ new methods against the same two-task sentinel scoreboard. SPECTRA-style
 projection is currently disfavored on runtime grounds. The next implementable
 method should probably be a cheaper downstream-propagation safety metric, not
 another local output/post-solve projection.
+
+## 2026-05-22: PRISM-Q Two-Task Result And Faster Diagnostic Harness
+
+Implemented first-pass PRISM-Q as `--intrinsic-target-purifier prism_q`.
+The purifier keeps the direct relational/context-value map, builds a same-pass
+innovation basis plus a local option/readout hazard basis, residualizes hazard
+against innovation, then clips generic-key -> hazard singular modes while
+preserving signal retention. This is still a cheap approximation to the 5.5 Pro
+proposal: it uses captured downstream MLP-output rows and local top-k LM-head
+contrasts, not exact `J_{l->r}` or attention V/O transport.
+
+Verification:
+
+```bash
+python -m py_compile caic/intrinsic_surprise.py \
+  scripts/minilang_write.py \
+  scripts/minilang_intrinsic_continual.py \
+  scripts/continual_benchmark_grid.py \
+  tests/test_intrinsic_surprise.py
+python -m pytest tests/test_intrinsic_surprise.py::test_prism_q_clips_generic_hazard_preserving_signal -q
+python -m pytest tests/test_intrinsic_surprise.py -q
+# 79 passed
+```
+
+Full two-task PRISM-Q, loose budget:
+
+```bash
+python scripts/continual_benchmark_grid.py \
+  --modal --run --preset prism_q \
+  --tag prism_q_20260522_121758
+```
+
+Result:
+
+- baseline: task0 `1/8`, task1 `1/8`;
+- full-context teacher: task0 `8/8`, task1 `8/8`;
+- after task0: task0 edited `1/8`;
+- after task1: task0 edited `2/8`, task1 edited `2/8`;
+- sentinel after task0: `7` correct-to-wrong, before-correct mean drop `6.607`;
+- sentinel after task1: `9` correct-to-wrong, before-correct mean drop `7.712`;
+- PRISM diagnostics: mean correction Frobenius `0.093`, mean hazard ratio
+  `0.635`, signal retention `~1.0`.
+
+Interpretation: loose PRISM was mostly inactive. Its spectral budget was often
+larger than the measured hazard, so it left the unsafe direct map effectively
+unchanged.
+
+Full two-task PRISM-Q, strict budget:
+
+```bash
+python scripts/continual_benchmark_grid.py \
+  --modal --run --preset prism_q_strict \
+  --tag prism_q_strict2_20260522_131144
+```
+
+Result:
+
+- after task0: task0 edited `1/8`;
+- after task1: task0 edited `1/8`, task1 edited `1/8`;
+- sentinel after task0: `5` correct-to-wrong, before-correct mean drop `5.862`;
+- sentinel after task1: `7` correct-to-wrong, before-correct mean drop `6.368`;
+- PRISM diagnostics: mean correction Frobenius `0.292`, mean hazard ratio
+  `0.207`, signal retention `~1.0`.
+
+Interpretation: strict PRISM did perform the intended hazard clipping, but it
+still did not protect sentinels and it collapsed acquisition to baseline. That
+falsifies this first PRISM approximation as the relevant safety coordinate.
+Either the real downstream hazard is not captured by the cheap MLP-output /
+top-k-logit basis, or the harmful component is not generic-key -> propagated
+option evidence in the form tested here.
+
+Runtime/harness update:
+
+The full all-layer two-task benchmark is too slow for first-pass purifier
+debugging. Added:
+
+- `--early-stop-c2w-over`;
+- `--early-stop-task0-min-edited-correct`;
+- `prism_q_fast` preset in `scripts/continual_benchmark_grid.py`.
+
+`prism_q_fast` uses 40 teacher-filter candidates, 4 eval questions, a
+representative 7-layer band, and early-stops after task 0 when sentinel c2w is
+nonzero or task-0 acquisition is below `1/4`. This is a diagnostic filter only:
+final claims still require the full all-layer, no-sidecar, two-task +
+expanded-sentinel benchmark.
+
+Updated diagnosis:
+
+PRISM-Q as implemented is not the missing object. The current evidence favors
+Q-RICO/key16-style filtering as the safest available weight-only continual
+baseline, despite low acquisition. The next move should focus on improving
+acquisition without reintroducing the broad sentinel-damaging component, and it
+should use fast diagnostics before promotion to the full two-task benchmark.
