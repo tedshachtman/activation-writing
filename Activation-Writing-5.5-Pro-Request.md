@@ -1,6 +1,6 @@
-# Request For GPT-5.5 Pro: One-Pass Surprise Consolidation After DICE Coordinate Follow-Up
+# Request For GPT-5.5 Pro: One-Pass Surprise Consolidation After DICE Unsafe-Write Follow-Up
 
-Date: 2026-05-22
+Date: 2026-05-23
 
 Audience: GPT-5.5 Pro. I am giving you two files:
 
@@ -9,11 +9,125 @@ Audience: GPT-5.5 Pro. I am giving you two files:
 2. This file: the current prompt/request. Please read the full research log
    first, then answer this prompt.
 
+## 2026-05-23 Update: DICE On Unsafe Learning-Causing Writes
+
+Please treat this update as the current live state. The full research log is
+attached separately; older DICE, TDMI-Q, TRACE-Q, PRISM-Q, and SEAL-Q sections
+below are retained for continuity.
+
+Hard constraint reminder: the sequential benchmark must pass only updated
+weights between tasks. There can be no old-key bank, old transform memory,
+Fisher sidecar, stored contexts, task router, harness state, or external
+protection object available to the next write. Diagnostic controls can use
+these objects, but final candidate methods cannot.
+
+The latest user hypothesis was: DICE should be tried on interventions that
+actually caused learning but were unsafe. The previous DICE runs mostly wrapped
+Q-RICO, which is already conservative. So I added fast reduced-fixture presets
+around the unsafe direct `relational_aggregate` context-value write, plus ORCA
+`residual_only` screens.
+
+### New Presets
+
+- `relational_raw_fast`: direct unsafe relational/context-value control.
+- `dice_relational_raw_fast`: 12 diverse contexts, support threshold `.80`.
+- `dice_relational_raw_strict_fast`: 12 diverse contexts, threshold `.875`.
+- `dice_relational_raw_screen_fast`: 6 diverse contexts, threshold `.67`.
+- `dice_orca_residual_fast`: 12-context DICE around ORCA `residual_only`.
+- `dice_orca_residual_screen_fast`: 4-context DICE around ORCA
+  `residual_only`.
+
+The ORCA-residual DICE runs were stopped for runtime: even the 4-context screen
+was too slow in the current implementation because every proposal rebuilds the
+ORCA basis. ORCA-DICE may still be conceptually relevant, but it needs proposal
+caching or a cheaper residual-only path before it is a practical experiment.
+
+### Raw-Relational DICE Results
+
+Reduced two-task fixture:
+
+- 40 teacher-filter candidates;
+- 4 eval questions per task;
+- representative layers `4,8,12,16,20,24,27`;
+- expanded sentinels;
+- early stop after task 0 if c2w > 0 or task0 edited < 1.
+
+| Preset | Contexts | Support threshold | Task0 baseline | Task0 edited | c2w after task0 | before-correct drop | Mean update Fro |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `relational_raw_fast` | `1` | n/a | `1/4` | `2/4` | `1` | `2.304` | `5.601` |
+| `dice_relational_raw_fast` | `12` | `.80` | `1/4` | `0/4` | `0` | `0.240` | `1.897` |
+| `dice_relational_raw_strict_fast` | `12` | `.875` | `1/4` | `0/4` | `0` | `0.159` | `1.492` |
+| `dice_relational_raw_screen_fast` | `6` | `.67` | `0/4` | `0/4` | `1` | `0.469` | `2.631` |
+
+Support diagnostics:
+
+| Preset | Mean support | p99 support | Gate mean | High-support fraction | Proposal cosine mean |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `dice_relational_raw_fast` | `0.0130` | `0.321` | `0.0020` | `0.0017` | `0.255` |
+| `dice_relational_raw_strict_fast` | `0.0134` | `0.321` | `0.0013` | `0.0011` | `0.253` |
+| `dice_relational_raw_screen_fast` | `0.0140` | `0.357` | `0.0050` | `0.0025` | `0.226` |
+
+Interpretation:
+
+Direct raw relational still proves the unsafe learner exists on this reduced
+fixture: `1/4 -> 2/4`, but with `1` c2w and large sentinel margin damage. Raw
+DICE around that same learner is a safety filter, not an invariant learner.
+At 12 contexts it removes c2w but also deletes all threshold acquisition. At 6
+contexts / lower threshold it still gets `0/4` and c2w comes back.
+
+This sharpens the DICE diagnosis:
+
+- diverse-context support is safety-relevant;
+- raw update entries are not the invariant unit;
+- SVD proposal modes are too broad and unsafe;
+- rival anti-support in raw entries is too blunt and inert;
+- applying raw-coordinate DICE to the unsafe learner confirms that the useful
+  threshold component is not linearly common in raw matrix coordinates.
+
+### Current Ask
+
+Please propose the next implementable multi-context tool under the weight-only
+sequential constraint.
+
+I do **not** think the right answer is "more raw DICE contexts." The next
+plausible direction is support over **key-conditioned behavioral/effect
+maplets**, not raw entries or global SVD modes:
+
+\[
+\phi_{c,i}
+=
+\left(
+\text{canonical source-key cluster},
+\text{canonical target/effect direction},
+k_{c,i}M_c
+\right).
+\]
+
+Please be specific enough to implement: tensors, alignment procedure, support
+score, anti-support score, closed-form solve or post-solve filter, diagnostics,
+first runs, ablations, and falsification criteria.
+
+Questions to answer:
+
+1. What is the right maplet coordinate for diverse-context support, given that
+   raw entries are too sparse and SVD modes are unsafe?
+2. How should source-key/role clusters be canonicalized across intentionally
+   different context worlds without using labels at write time?
+3. How should rival-language anti-support be matched at the maplet level so it
+   subtracts translation posture but not true lexical/grammar binding?
+4. Should maplet DICE wrap raw relational/context-value proposals, ORCA
+   residual-only proposals, or Q-RICO residual-filter proposals?
+5. What cheap screening implementation avoids the current ORCA-DICE runtime
+   problem?
+6. What reduced-fixture pass bar should promote a method to the full two-task
+   benchmark?
+7. What ablation distinguishes "DICE learned the invariant language object"
+   from "DICE just made a smaller update"?
+
 ## 2026-05-22 Update: DICE Coordinate Follow-Up
 
-Please treat this update as the current live state. The TDMI-Q, TRACE-Q,
-PRISM-Q, and SEAL-Q sections below are retained for continuity, and the full
-research log is attached separately.
+This older section is retained for continuity. The 2026-05-23 unsafe-write
+DICE update above is the current live state.
 
 After the first DICE sweep, I implemented the two obvious coordinate
 follow-ups:

@@ -7354,3 +7354,107 @@ effects that recur in rival-language contexts with different source tokens.
 That is more expensive to implement but is the coordinate that matches the
 hypothesis. Raw DICE has now done enough to show the idea is safety-relevant
 but underpowered in weight-entry space.
+
+## 2026-05-23: DICE On Unsafe Learning-Causing Writes
+
+The user pointed out an important experimental priority: DICE should be tested
+on the interventions that actually caused learning but were unsafe, not only on
+already-conservative Q-RICO proposals. The hard sequential constraint remains:
+between tasks there is no harness state, old-key bank, old transform memory, or
+stored sidecar. The next task receives only the model with updated weights.
+
+I added fast reduced-fixture presets:
+
+- `relational_raw_fast`: direct `relational_aggregate` context-value control;
+- `dice_relational_raw_fast`: 12 diverse contexts, support threshold `.80`;
+- `dice_relational_raw_strict_fast`: 12 diverse contexts, threshold `.875`;
+- `dice_relational_raw_screen_fast`: 6 diverse contexts, threshold `.67`;
+- `dice_orca_residual_fast`: 12-context DICE around ORCA `residual_only`;
+- `dice_orca_residual_screen_fast`: 4-context DICE around ORCA
+  `residual_only`.
+
+The ORCA-residual DICE runs were stopped for runtime: even four contexts were
+too slow in the current implementation because each proposal rebuilds the ORCA
+basis. This is an engineering result: ORCA-DICE needs proposal caching or a
+cheaper residual-only path before it is practical.
+
+### Fast Results
+
+All completed runs use the same reduced two-task gate:
+
+- 40 teacher-filter candidates;
+- 4 eval questions per task;
+- representative layers `4,8,12,16,20,24,27`;
+- expanded sentinels;
+- early stop after task 0 if c2w > 0 or task0 edited < 1.
+
+| Preset | Contexts | Support threshold | Task0 baseline | Task0 edited | c2w after task0 | before-correct drop | Mean update Fro |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `relational_raw_fast` | `1` | n/a | `1/4` | `2/4` | `1` | `2.304` | `5.601` |
+| `dice_relational_raw_fast` | `12` | `.80` | `1/4` | `0/4` | `0` | `0.240` | `1.897` |
+| `dice_relational_raw_strict_fast` | `12` | `.875` | `1/4` | `0/4` | `0` | `0.159` | `1.492` |
+| `dice_relational_raw_screen_fast` | `6` | `.67` | `0/4` | `0/4` | `1` | `0.469` | `2.631` |
+
+DICE support diagnostics for the raw-relational variants:
+
+| Preset | Mean support | p99 support | Gate mean | High-support fraction | Proposal cosine mean |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `dice_relational_raw_fast` | `0.0130` | `0.321` | `0.0020` | `0.0017` | `0.255` |
+| `dice_relational_raw_strict_fast` | `0.0134` | `0.321` | `0.0013` | `0.0011` | `0.253` |
+| `dice_relational_raw_screen_fast` | `0.0140` | `0.357` | `0.0050` | `0.0025` | `0.226` |
+
+### Interpretation
+
+This is a strong negative result for raw-coordinate DICE on the unsafe
+learning-causing write.
+
+The direct raw relational write learns on the reduced fixture (`1/4 -> 2/4`)
+but is unsafe (`1` c2w, large before-correct drop). High-support DICE around
+that same write removes the c2w at 12 contexts, but it also deletes all
+threshold-crossing acquisition (`0/4`). Lowering the context count and support
+threshold does not recover acquisition; it brings c2w back while still getting
+`0/4`.
+
+The support statistics explain why: the acquisition-bearing raw update is not
+coordinate-aligned across diverse context worlds. Even the p99 coordinate only
+appears with the same sign in about one third of proposals, and the mean gate is
+near zero. DICE is not finding a robust lexical/grammar object in raw weight
+entries; it is mostly selecting a tiny invariant intersection that behaves like
+a safety shrinker.
+
+Current DICE conclusion is now sharper:
+
+- The diverse-context idea is real as a safety filter.
+- Raw update entries are the wrong invariant unit.
+- Global proposal SVD is too broad and unsafe.
+- Rival anti-support in raw entries is too blunt and inert.
+- Applying raw-coordinate DICE to the unsafe learner confirms that the true
+  threshold component is not linearly common in raw matrix coordinates.
+
+The remaining plausible DICE direction is not "more contexts" by itself. It is
+support over **key-conditioned behavioral/effect maplets**:
+
+\[
+\phi_{c,i}
+=
+\left(
+\text{canonical source-key cluster},
+\text{canonical target/effect direction},
+k_{c,i}M_c
+\right).
+\]
+
+Support should be counted after aligning lexical/role clusters across context
+worlds. Anti-support must be matched at the maplet level, not the weight-entry
+level, so translation posture can be subtracted without deleting the true
+source-to-target binding.
+
+The next DICE implementation should therefore either:
+
+1. cluster selected relational keys across contexts and vote over their induced
+   residual effects; or
+2. compare proposal effects on a fixed bank of held-in-context source-role
+   anchor rows from each context, rather than comparing the full weight update.
+
+Until that exists, raw DICE should be treated as a useful falsifier and safety
+diagnostic, not a frontier method.
