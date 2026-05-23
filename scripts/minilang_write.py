@@ -1627,6 +1627,8 @@ def dice_support_consensus_update(
     anti_updates: list[torch.Tensor] | None = None,
     key_sets: list[torch.Tensor] | None = None,
     anti_key_sets: list[torch.Tensor] | None = None,
+    target_sets: list[torch.Tensor] | None = None,
+    anti_target_sets: list[torch.Tensor] | None = None,
     support_space: str = "coordinate",
     subspace_rank: int = 8,
     effect_rank: int = 64,
@@ -1645,10 +1647,10 @@ def dice_support_consensus_update(
 
     DICE is intentionally stricter than the older mean/directional ensembles:
     each coordinate, feature-column maplet, key-conditioned effect,
-    key-relation effect, or shared proposal mode is kept only when it recurs
-    across many independently rendered contexts. The goal is to preserve
-    invariants shared across diverse contexts while suppressing context-local
-    surface posture.
+    key-relation effect, target-group effect, or shared proposal mode is kept
+    only when it recurs across many independently rendered contexts. The goal
+    is to preserve invariants shared across diverse contexts while suppressing
+    context-local surface posture.
     """
 
     if not updates:
@@ -1679,6 +1681,7 @@ def dice_support_consensus_update(
     mode_energy_fraction = 1.0
     actual_rank = 0
     key_pool_rows = 0
+    target_pool_rows = 0
     mean_effect = None
     if support_space == "coordinate":
         positive = (stack > 0).float().mean(dim=0)
@@ -1793,6 +1796,93 @@ def dice_support_consensus_update(
             ).float().mean(dim=0)
         else:
             anti_same = torch.zeros_like(support)
+    elif support_space == "target_group_effect":
+        if not key_sets or not target_sets:
+            raise ValueError("target_group_effect DICE support requires key_sets and target_sets")
+        pooled_targets = torch.cat(
+            [targets.detach().float().cpu() for targets in target_sets if targets.numel() > 0],
+            dim=0,
+        )
+        target_pool_rows = int(pooled_targets.shape[0])
+        if pooled_targets.numel() == 0:
+            raise ValueError("target_group_effect DICE support received empty target_sets")
+        cap = int(effect_key_cap)
+        if cap > 0 and pooled_targets.shape[0] > cap:
+            idx = torch.linspace(0, pooled_targets.shape[0] - 1, cap, dtype=torch.long)
+            pooled_targets = pooled_targets.index_select(0, idx)
+        pooled_targets = pooled_targets / torch.linalg.vector_norm(
+            pooled_targets,
+            dim=1,
+            keepdim=True,
+        ).clamp_min(1e-12)
+        rank = max(1, min(int(effect_rank), pooled_targets.shape[0], pooled_targets.shape[1]))
+        _u, singular_values, vh = torch.linalg.svd(pooled_targets, full_matrices=False)
+        projected = pooled_targets @ vh[:rank].T
+        selected: list[int] = []
+        first = int(
+            torch.argmax(
+                torch.linalg.vector_norm(
+                    projected - projected.mean(dim=0, keepdim=True),
+                    dim=1,
+                )
+            ).item()
+        )
+        selected.append(first)
+        min_dist = torch.cdist(projected[first : first + 1], projected).squeeze(0)
+        while len(selected) < rank:
+            next_idx = int(torch.argmax(min_dist).item())
+            if next_idx in selected:
+                break
+            selected.append(next_idx)
+            dist = torch.cdist(projected[next_idx : next_idx + 1], projected).squeeze(0)
+            min_dist = torch.minimum(min_dist, dist)
+        prototypes = pooled_targets.index_select(0, torch.tensor(selected, dtype=torch.long))
+        actual_rank = int(prototypes.shape[0])
+
+        def grouped_keys(keys: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+            keys_f = keys.detach().float().cpu()
+            targets_f = targets.detach().float().cpu()
+            targets_f = targets_f / torch.linalg.vector_norm(targets_f, dim=1, keepdim=True).clamp_min(1e-12)
+            sim = (targets_f @ prototypes.T).clamp_min(0.0).square()
+            denom = sim.sum(dim=0).clamp_min(1e-12)
+            grouped = sim.T @ keys_f / denom.unsqueeze(1)
+            return grouped / torch.linalg.vector_norm(grouped, dim=1, keepdim=True).clamp_min(1e-12)
+
+        grouped_positive = torch.stack(
+            [grouped_keys(keys, targets) for keys, targets in zip(key_sets, target_sets, strict=True)],
+            dim=0,
+        )
+        key_basis = grouped_positive.mean(dim=0)
+        key_basis = key_basis / torch.linalg.vector_norm(key_basis, dim=1, keepdim=True).clamp_min(1e-12)
+        effects = torch.einsum("cgm,cdm->cgd", grouped_positive, stack)
+        positive = (effects > 0).float().mean(dim=0)
+        negative = (effects < 0).float().mean(dim=0)
+        support = torch.maximum(positive, negative)
+        mean_effect = effects.mean(dim=0)
+        reconstruction_basis = key_basis
+        mean_coeff = None
+        denom = singular_values.square().sum().clamp_min(1e-12)
+        mode_energy_fraction = float((singular_values[:rank].square().sum() / denom).item())
+        if anti_updates:
+            anti_stack = torch.stack([update.detach().float().cpu() for update in anti_updates], dim=0)
+            if anti_key_sets and anti_target_sets and len(anti_key_sets) == len(anti_updates):
+                grouped_anti = torch.stack(
+                    [
+                        grouped_keys(keys, targets)
+                        for keys, targets in zip(anti_key_sets, anti_target_sets, strict=True)
+                    ],
+                    dim=0,
+                )
+                anti_effects = torch.einsum("cgm,cdm->cgd", grouped_anti, anti_stack)
+            else:
+                anti_effects = torch.einsum("gm,cdm->cgd", key_basis, anti_stack)
+            common_sign = torch.sign(mean_effect)
+            anti_same = (
+                (torch.sign(anti_effects) == common_sign.unsqueeze(0))
+                & (common_sign.unsqueeze(0) != 0)
+            ).float().mean(dim=0)
+        else:
+            anti_same = torch.zeros_like(support)
     elif support_space == "svd":
         rank = max(1, min(int(subspace_rank), flat.shape[0], flat.shape[1]))
         _u, singular_values, vh = torch.linalg.svd(flat, full_matrices=False)
@@ -1840,7 +1930,7 @@ def dice_support_consensus_update(
         assert reconstruction_basis is None
         final_update = mean_update * gate.unsqueeze(0)
         mean_map_fro = torch.linalg.vector_norm(mean_update)
-    elif support_space in {"key_effect", "key_edge_effect"}:
+    elif support_space in {"key_effect", "key_edge_effect", "target_group_effect"}:
         assert reconstruction_basis is not None and mean_effect is not None
         final_effect = mean_effect * gate
         gram = reconstruction_basis @ reconstruction_basis.T
@@ -1864,9 +1954,11 @@ def dice_support_consensus_update(
         "dice_support_space_is_column": 1.0 if support_space == "column" else 0.0,
         "dice_support_space_is_key_effect": 1.0 if support_space == "key_effect" else 0.0,
         "dice_support_space_is_key_edge_effect": 1.0 if support_space == "key_edge_effect" else 0.0,
+        "dice_support_space_is_target_group_effect": 1.0 if support_space == "target_group_effect" else 0.0,
         "dice_subspace_rank": float(actual_rank),
         "dice_subspace_energy_fraction": float(mode_energy_fraction),
         "dice_effect_key_pool_rows": float(key_pool_rows),
+        "dice_effect_target_pool_rows": float(target_pool_rows),
         "dice_effect_rank": float(effect_rank),
         "dice_effect_ridge": float(effect_ridge),
         "dice_support_threshold": threshold,
@@ -2903,7 +2995,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dice-defer-apply", action="store_true")
     parser.add_argument(
         "--dice-support-space",
-        choices=["coordinate", "column", "key_effect", "key_edge_effect", "svd"],
+        choices=["coordinate", "column", "key_effect", "key_edge_effect", "target_group_effect", "svd"],
         default="coordinate",
     )
     parser.add_argument("--dice-subspace-rank", type=int, default=8)
@@ -3382,6 +3474,7 @@ def run_intrinsic_surprise_writes(
     generic_geometry: dict[int, tuple[torch.Tensor | None, torch.Tensor | None]] = {}
     dice_deferred_updates: dict[int, list[torch.Tensor]] = {}
     dice_deferred_keys: dict[int, list[torch.Tensor]] = {}
+    dice_deferred_targets: dict[int, list[torch.Tensor]] = {}
     lm_basis = lm_head_generic_basis(model, args.intrinsic_surprise_lm_head_generic_rank)
     output_penalty_basis = lm_head_generic_basis(model, args.intrinsic_surprise_output_penalty_rank)
     if (
@@ -3434,6 +3527,7 @@ def run_intrinsic_surprise_writes(
         write_contexts.extend((False, idx, text) for idx, text in enumerate(dice_anti_lesson_texts))
     dice_deferred_anti_updates: dict[int, list[torch.Tensor]] = {}
     dice_deferred_anti_keys: dict[int, list[torch.Tensor]] = {}
+    dice_deferred_anti_targets: dict[int, list[torch.Tensor]] = {}
     for is_positive_dice_context, lesson_idx, lesson_text in write_contexts:
         if not is_positive_dice_context and not args.dice_defer_apply:
             continue
@@ -4654,8 +4748,12 @@ def run_intrinsic_surprise_writes(
             if args.dice_defer_apply:
                 target_store = dice_deferred_updates if is_positive_dice_context else dice_deferred_anti_updates
                 key_store = dice_deferred_keys if is_positive_dice_context else dice_deferred_anti_keys
+                dice_target_store = (
+                    dice_deferred_targets if is_positive_dice_context else dice_deferred_anti_targets
+                )
                 target_store.setdefault(layer_idx, []).append(update.detach().float().cpu())
                 key_store.setdefault(layer_idx, []).append(selection.keys.detach().float().cpu())
+                dice_target_store.setdefault(layer_idx, []).append(selection.targets.detach().float().cpu())
                 append_jsonl(
                     updates_path,
                     {
@@ -5030,6 +5128,8 @@ def run_intrinsic_surprise_writes(
                 anti_updates=dice_deferred_anti_updates.get(layer_idx),
                 key_sets=dice_deferred_keys.get(layer_idx),
                 anti_key_sets=dice_deferred_anti_keys.get(layer_idx),
+                target_sets=dice_deferred_targets.get(layer_idx),
+                anti_target_sets=dice_deferred_anti_targets.get(layer_idx),
                 support_space=args.dice_support_space,
                 subspace_rank=args.dice_subspace_rank,
                 effect_rank=args.dice_effect_rank,

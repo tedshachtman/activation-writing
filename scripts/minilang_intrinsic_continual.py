@@ -175,7 +175,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dice-defer-apply", action="store_true")
     parser.add_argument(
         "--dice-support-space",
-        choices=["coordinate", "column", "key_effect", "key_edge_effect", "svd"],
+        choices=["coordinate", "column", "key_effect", "key_edge_effect", "target_group_effect", "svd"],
         default="coordinate",
     )
     parser.add_argument("--dice-subspace-rank", type=int, default=8)

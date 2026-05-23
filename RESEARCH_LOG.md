@@ -7870,6 +7870,8 @@ Local one-task teacher-filtered gate:
 | DICE raw, `4+4` anti, strict column support | `0/4` | `4/4` | `1/4` | `0` | `0.423` |
 | DICE raw, `4+4` anti, key-effect support | `0/4` | `4/4` | `1/4` | `0` | `0.057` |
 | DICE raw, `4+4` anti, key-edge-effect support | `0/4` | `4/4` | `1/4` | `0` | `0.138` |
+| DICE raw, `4+4` anti, target-group support | `0/4` | `4/4` | `0/4` | `1` | `0.748` |
+| DICE raw, `4+4` anti, strict target-group r16 | `0/4` | `4/4` | `0/4` | `0` | `0.008` |
 | DICE raw, `4+4` anti, light key-effect support | `0/4` | `4/4` | `1/4` | `1` | `0.529` |
 | DICE raw, `4+4` anti, scale `.15` | `0/4` | `4/4` | `1/4` | `0` | `0.081` |
 | DICE raw, `4+4` anti, scale `.25` | `0/4` | `4/4` | `1/4` | `0` | `0.130` |
@@ -7926,6 +7928,14 @@ Additional local conclusions:
   key-effect support (`0.138` vs `0.057`) and Vomar-only remains `0/4`
   (`0` c2w, drop `0.173`, mean final Frobenius `0.586`). So first-order
   relational key edgelets did not recover the missing payload.
+- I added `--dice-support-space target_group_effect`, which clusters positive
+  target/effect directions, aggregates context keys per target group, votes on
+  group effects, and reconstructs a minimum-norm update. The default `r64`
+  version is actively bad: `0/4`, `1` c2w, drop `0.748`, mean final Frobenius
+  `4.02`. A stricter `r16` version becomes very safe but inert: `0/4`, `0`
+  c2w, drop `0.008`, mean final Frobenius `0.832`. So naive target grouping
+  also fails: it either amplifies contaminated grouped effects or shrinks to a
+  harmless no-op.
 - Vomar-only controls complicate the task1 story. Strict key-effect DICE on
   Vomar from base gets `0/4`, `0` c2w, drop `0.061`, with mean final update
   Frobenius `0.867`. Raw relational on a Vomar-only local gate also gets `0/4`
@@ -7970,10 +7980,12 @@ Interpretation:
   SVD support is too conservative. The missing object is likely a structured
   support coordinate. Plain feature-column maplets are not sufficient: they
   recover mass, but the extra mass is not reliably sentinel-safe. Key-effect
-  maplets are cleaner, but still only preserve a small shard. The next
-  plausible coordinate is relational key-effect edgelets, e.g. support over
-  `(u_a-u_b)M`, target-token grouped components, or ORCA-residual map
-  components with same-format anti-support.
+  maplets are cleaner, but still only preserve a small shard. Naive key-edge
+  and target-grouped variants have now been tried and are not enough. The next
+  plausible coordinate needs richer role alignment than pooled key SVD,
+  prototype key differences, or target clusters; ORCA-residual map components
+  with same-format anti-support remain plausible if the runtime can be made
+  cheap.
 
 Interpretation:
 
@@ -8024,3 +8036,13 @@ dice_relational_raw_key_edge_anti_fast
 The local result says this is not the new frontier: it is safe but more
 conservative than key-effect and does not fix Vomar. It is useful mainly as a
 negative test for naive relational key-effect edgelets.
+
+I also added a target-group diagnostic preset:
+
+```text
+dice_relational_raw_target_group_anti_fast
+```
+
+The local result is negative. Target grouping is not the missing semantic
+coordinate in its current form: high rank is unsafe and inert; low rank is safe
+and inert.

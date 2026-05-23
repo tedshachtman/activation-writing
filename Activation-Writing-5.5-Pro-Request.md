@@ -200,6 +200,8 @@ relational write:
 | DICE raw, `4+4` anti, strict column support | `0/4` | `4/4` | `1/4` | `0` | `0.423` |
 | DICE raw, `4+4` anti, key-effect support | `0/4` | `4/4` | `1/4` | `0` | `0.057` |
 | DICE raw, `4+4` anti, key-edge-effect support | `0/4` | `4/4` | `1/4` | `0` | `0.138` |
+| DICE raw, `4+4` anti, target-group support | `0/4` | `4/4` | `0/4` | `1` | `0.748` |
+| DICE raw, `4+4` anti, strict target-group r16 | `0/4` | `4/4` | `0/4` | `0` | `0.008` |
 | DICE raw, `4+4` anti, light key-effect support | `0/4` | `4/4` | `1/4` | `1` | `0.529` |
 | DICE raw, `4+4` anti, scale `.25` | `0/4` | `4/4` | `1/4` | `0` | `0.130` |
 | DICE raw, `4+4` anti, loose support | `0/4` | `4/4` | `1/4` | `0` | `0.077` |
@@ -236,6 +238,13 @@ Follow-up findings:
   key-effect support (`0.138` vs `0.057`) and Vomar-only remains `0/4`
   (`0` c2w, drop `0.173`, mean final Frobenius `0.586`). So naive relational
   key-edge maplets are not enough.
+- I added `--dice-support-space target_group_effect`, which clusters positive
+  target/effect directions, aggregates context keys per target group, votes on
+  group effects, and reconstructs a minimum-norm update. The default `r64`
+  version is actively bad: `0/4`, `1` c2w, drop `0.748`, mean final Frobenius
+  `4.02`. A stricter `r16` version becomes very safe but inert: `0/4`, `0`
+  c2w, drop `0.008`, mean final Frobenius `0.832`. So naive target grouping is
+  not the missing coordinate either.
 - Vomar-only controls weaken the "second write suppression" interpretation.
   Strict key-effect DICE on Vomar from base gets `0/4`, `0` c2w, drop `0.061`,
   with mean final update Frobenius `0.867`. A raw-relational Vomar-only local
@@ -278,11 +287,13 @@ feature-column support recovers more mass, but the extra mass is not clean
 enough: relaxed column support has c2w, and strict column support reintroduces
 c2w in the two-task gate. Key-effect support is cleaner and is now the best
 DICE coordinate tested, but it still only learns a small shard. Naive
-key-edge-effect support is also too weak. The next proposal should probably
-refine role/effect alignment: target-token grouped support, richer role-aligned
-key/effect maplets, ORCA-residual components with anti-support, or a closed-form
-quotient that subtracts rival-language common posture from the direct
-relational map without collapsing to a tiny coordinate gate.
+key-edge-effect support is also too weak, and target-group support is either
+unsafe/inert or safe/inert. The next proposal should probably refine
+role/effect alignment beyond pooled selected-key SVD, prototype key
+differences, and target-vector clusters: richer role-aligned key/effect
+maplets, ORCA-residual components with anti-support, or a closed-form quotient
+that subtracts rival-language common posture from the direct relational map
+without collapsing to a tiny coordinate gate.
 
 ### Hard Constraints
 
