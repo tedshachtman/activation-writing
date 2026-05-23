@@ -126,6 +126,48 @@ it did not acquire. The ambient/object energy ratio suggests the first TAG-CE
 layer veto or ambient penalty may be over-shrinking the actual update. The
 proper reduced two-task CUDA fixture is still the next decisive run.
 
+### Latest TAG-CE Safety Screen
+
+I then ran a small 7-layer local MPS two-task screen. This screen is not
+acquisition-informative because raw relational does not acquire either, but it
+is useful for sentinel drift:
+
+- two tasks, Lyran then Vomar;
+- no teacher filtering;
+- `2` lessons/task, `4` examples/lesson, `2` eval questions/task;
+- layers `4 8 12 16 20 24 27`;
+- core sentinel suite.
+
+Results:
+
+| Run | Task0 after task0 | c2w after task0 | drop after task0 | Task0 after task1 | Task1 after task1 | c2w after task1 | drop after task1 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| raw relational | `0/2` | `1` | `2.289` | `0/2` | `0/2` | `2` | `3.565` |
+| TAG-CE + centroid anchor | `0/2` | `0` | `0.276` | `0/2` | `1/2` | `0` | `0.676` |
+| TAG-CE + centroid + raw node potential | `0/2` | `0` | `2.555` | `0/2` | `1/2` | `1` | `3.084` |
+| TAG-CE + centroid + conditioned node potential | `0/2` | `0` | `2.547` | `0/2` | `1/2` | `1` | `3.591` |
+| TAG-CE + centroid + lowfreq rank-4 node modes | `0/2` | `0` | `4.742` | `0/2` | `1/2` | `1` | `5.085` |
+
+This suggests:
+
+- the edge-field/Schur coordinate is safety-relevant;
+- the centroid anchor is the safest current TAG-CE variant;
+- a direct graph node-potential anchor is locally falsified, even after
+  centering and norm capping, because graph potentials contain unstable
+  graph-constant/low-frequency components;
+- naive low-frequency graph Laplacian node modes are also locally falsified;
+  smooth node modes still carry generic/default posture unless conditioned more
+  strongly;
+- the fast preset now defaults to centroid-anchor-only. `--tagce-potential-weight`
+  and `--tagce-lowfreq-weight` remain only as ablation knobs.
+
+New live question: how should we reintroduce graph-constant or low-frequency
+node information, which may carry threshold/acquisition signal, without writing
+generic posture/default drift? A good answer may use component centroids,
+explicitly object-conditioned low-frequency modes, Schur-residualized node
+modes, or cross-context invariant graph modes, but the naive full node
+potential and naive low-frequency modes are not safe.
+
 ### Hard Constraints
 
 Please satisfy all constraints:

@@ -2904,3 +2904,89 @@ Please treat the next proposal as needing to be cheap enough for the
    computed from the same pass/current weights; or
 2. a weight-only consolidation mark/protection mechanism that does not distort
    future surprise coordinates like gauge-scale sealing did.
+
+## Postscript 12: TAG-CE Implemented, Centroid Anchor Safe, Node Potential Unsafe
+
+After your global-coherence/TAG-CE proposal, I implemented the first
+edge-lifted graph-coherence purifier:
+
+```text
+--intrinsic-target-purifier tag_ce
+```
+
+The implementation fits relation-field targets:
+
+```text
+node target R -> edge target B R -> graph-settled D* -> ridge solve on B K
+```
+
+with Schur absorption of generic edge-pattern x posture/readout-value fields.
+It is cheap enough to run in the current harness, unlike exact-basis SPECTRA.
+
+Current verification:
+
+```bash
+pytest tests/test_intrinsic_surprise.py -q
+# 43 passed
+```
+
+I also added a centroid anchor because a pure incidence/edge target can erase
+graph-constant/common components, and earlier experiments showed that common
+components can carry real acquisition.
+
+Small local MPS safety screen:
+
+- two tasks, Lyran then Vomar;
+- no teacher filtering;
+- `2` lessons/task, `4` examples/lesson, `2` eval questions/task;
+- layers `4 8 12 16 20 24 27`;
+- core sentinel suite.
+
+This fixture is not acquisition-informative: raw relational does not acquire
+either. It is only a safety/drift screen.
+
+| Run | Task0 after task0 | c2w after task0 | drop after task0 | Task0 after task1 | Task1 after task1 | c2w after task1 | drop after task1 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| raw relational | `0/2` | `1` | `2.289` | `0/2` | `0/2` | `2` | `3.565` |
+| TAG-CE + centroid anchor | `0/2` | `0` | `0.276` | `0/2` | `1/2` | `0` | `0.676` |
+| TAG-CE + centroid + raw node potential | `0/2` | `0` | `2.555` | `0/2` | `1/2` | `1` | `3.084` |
+| TAG-CE + centroid + conditioned node potential | `0/2` | `0` | `2.547` | `0/2` | `1/2` | `1` | `3.591` |
+| TAG-CE + centroid + lowfreq rank-4 node modes | `0/2` | `0` | `4.742` | `0/2` | `1/2` | `1` | `5.085` |
+
+Important finding:
+
+The graph-settled node potential is unsafe as a direct anchor. It is only
+defined up to graph constants and becomes numerically ill-conditioned. Even
+after centering and norm capping, it reintroduced task1 c2w and large sentinel
+margin drift. A naive low-frequency Laplacian node-mode anchor is also unsafe:
+it produced the largest margin drift in the local screen. I removed
+`--tagce-potential-weight 0.15` from the fast presets. The default TAG-CE fast
+path is now centroid-anchor-only; potential and low-frequency node anchors
+remain ablation knobs.
+
+Current interpretation:
+
+TAG-CE's edge-field/Schur coordinate looks safety-relevant, because the centroid
+variant removes raw c2w and sharply reduces sentinel margin drift in the local
+screen. But the first edge-only version likely loses threshold information. The
+right next mathematical question is how to reintroduce graph-constant or
+low-frequency node information in an object-conditioned way without writing raw
+posture/default drift.
+
+Please propose the next implementable refinement under the same constraints:
+
+- one lesson/context forward pass;
+- closed-form or bounded linear algebra solve;
+- all-layer compatible;
+- no labels, probes, sentinels, null prompts, SAE, RAG, router, or sidecar
+  memory;
+- after a write, the next task receives only updated model weights;
+- primary score is two-task acquisition/retention plus sentinel preservation.
+
+I am especially interested in a principled way to add back the missing
+graph-constant/low-frequency coherence component. The naive full node-potential
+anchor and naive low-frequency Laplacian node modes are both falsified locally.
+A better answer might use component centroids, explicitly object-conditioned
+low-frequency modes, Schur-residualized node modes, or cross-context/DICE-style
+invariant graph modes, but it must avoid becoming another generic posture
+write.

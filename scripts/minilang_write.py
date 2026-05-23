@@ -2625,6 +2625,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tagce-ambient-key-rank", type=int, default=16)
     parser.add_argument("--tagce-eta-ambient", type=float, default=0.25)
     parser.add_argument("--tagce-eta-posture-ambient", type=float, default=1.0)
+    parser.add_argument("--tagce-anchor-weight", type=float, default=0.0)
+    parser.add_argument("--tagce-potential-weight", type=float, default=0.0)
+    parser.add_argument("--tagce-lowfreq-weight", type=float, default=0.0)
+    parser.add_argument("--tagce-lowfreq-rank", type=int, default=4)
     parser.add_argument("--tagce-layer-veto-budget", type=float, default=0.75)
     parser.add_argument("--tagce-disable-layer-veto", action="store_true")
     parser.add_argument("--tagce-disable-schur", action="store_true")
@@ -4020,6 +4024,10 @@ def run_intrinsic_surprise_writes(
                     ambient_key_rank=args.tagce_ambient_key_rank,
                     eta_ambient=args.tagce_eta_ambient,
                     eta_posture_ambient=args.tagce_eta_posture_ambient,
+                    anchor_weight=args.tagce_anchor_weight,
+                    potential_weight=args.tagce_potential_weight,
+                    lowfreq_weight=args.tagce_lowfreq_weight,
+                    lowfreq_rank=args.tagce_lowfreq_rank,
                     negative_weight=args.intrinsic_surprise_input_penalty_weight,
                     ridge=args.ridge,
                     layer_veto_budget=args.tagce_layer_veto_budget,

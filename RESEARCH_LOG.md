@@ -7744,3 +7744,68 @@ Required falsifiers:
   writing broad posture/mode rather than graph coherence.
 - matched-Fro raw relational matching TAG-CE would mean the method is just a
   scale change.
+
+### Local 7-Layer Safety Screens
+
+I then ran a very small local MPS two-task screen because CUDA/teacher-filtered
+full runs are not available on this machine. This screen is useful for safety
+and drift only: raw relational does not acquire on it either, so lack of
+acquisition is not a decisive TAG-CE falsifier here.
+
+Shared setup:
+
+- model: `Qwen/Qwen3-1.7B`
+- tasks: Lyran then Vomar
+- no teacher filtering
+- `2` lessons/task, `4` examples/lesson, `2` eval questions/task
+- layers: `4 8 12 16 20 24 27`
+- target: relational aggregate, context-value, final-aligned
+- protection: output/input `256/10`, `256/20`
+- sentinel suite: core
+
+Results:
+
+| Run | Task0 after task0 | c2w after task0 | drop after task0 | Task0 after task1 | Task1 after task1 | c2w after task1 | drop after task1 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| raw relational | `0/2` | `1` | `2.289` | `0/2` | `0/2` | `2` | `3.565` |
+| TAG-CE + centroid anchor | `0/2` | `0` | `0.276` | `0/2` | `1/2` | `0` | `0.676` |
+| TAG-CE + centroid + raw node potential | `0/2` | `0` | `2.555` | `0/2` | `1/2` | `1` | `3.084` |
+| TAG-CE + centroid + conditioned node potential | `0/2` | `0` | `2.547` | `0/2` | `1/2` | `1` | `3.591` |
+| TAG-CE + centroid + lowfreq rank-4 node modes | `0/2` | `0` | `4.742` | `0/2` | `1/2` | `1` | `5.085` |
+
+Interpretation:
+
+- Pure edge-field TAG-CE risks deleting graph-constant/common components. This
+  is consistent with earlier evidence that some common component can be
+  behaviorally useful, even when it looks posture-like.
+- Adding a single weighted centroid node anchor is locally much safer than raw:
+  it removes raw's c2w and cuts before-correct sentinel margin drop from
+  `3.565` to `0.676` after two tasks on the 7-layer screen.
+- Adding the graph-settled node potential is not safe. The node potential is
+  only defined up to graph constants and is numerically ill-conditioned; even
+  after centering and norm capping, it reintroduced task1 c2w and large margin
+  drift.
+- Adding naive low-frequency graph Laplacian node modes is also unsafe. It
+  reintroduced task1 c2w and produced even larger before-correct margin drift
+  than the potential anchor. Smooth node modes are therefore not enough; they
+  still carry generic/default posture unless conditioned more strongly.
+- I removed `--tagce-potential-weight 0.15` from the fast presets. The current
+  default TAG-CE fast path is centroid-anchor-only; node potential remains an
+  explicit ablation knob.
+
+Current TAG-CE diagnosis:
+
+The edge-field/Schur idea is still plausible as a safety coordinate, but the
+first implementation is probably too edge-only to recover the threshold
+component. The next useful refinement should reintroduce graph-constant or
+low-frequency node information only when it is object-conditioned, not by
+writing the raw graph potential. Candidate directions:
+
+1. Use only component-centered centroids or an explicitly object-conditioned
+   version of low-frequency modes. Naive Laplacian low-frequency modes are now
+   locally falsified.
+2. Put the centroid/low-frequency target through the same Schur posture
+   absorber as the edge field.
+3. Test TAG-CE only on an acquisition-informative fixture next: teacher-filtered
+   CUDA/Modal `tag_ce_fast` versus raw/Q-RICO. The local no-teacher MPS screen
+   can only say that centroid TAG-CE is safer than raw at matched fixture scale.

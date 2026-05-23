@@ -4375,7 +4375,7 @@ def _tagce_settle_edge_target(
     edge_sim_top_k: int,
     disable_graph_settle: bool = False,
     eps: float = 1e-6,
-) -> tuple[torch.Tensor, float]:
+) -> tuple[torch.Tensor, torch.Tensor, float]:
     """Smooth an edge target and project it back to a node-potential field."""
 
     b = incidence.detach().float()
@@ -4404,7 +4404,74 @@ def _tagce_settle_edge_target(
     node_potential = _solve_symmetric_psd(node_system, b.T @ d_smooth)
     d_star = b @ node_potential
     curl = torch.linalg.vector_norm(d_smooth - d_star).square() / torch.linalg.vector_norm(d_smooth).square().clamp_min(float(eps))
-    return d_star.contiguous(), float(curl.item())
+    return d_star.contiguous(), node_potential.contiguous(), float(curl.item())
+
+
+def _tagce_condition_node_potential(
+    node_potential: torch.Tensor,
+    node_targets: torch.Tensor,
+    node_weights: torch.Tensor,
+    *,
+    cap_multiplier: float = 2.0,
+    eps: float = 1e-6,
+) -> tuple[torch.Tensor, float, float, float]:
+    """Gauge-fix and cap a graph-settled node potential before using it as a node anchor."""
+
+    raw = torch.nan_to_num(node_potential.detach().float(), nan=0.0, posinf=0.0, neginf=0.0)
+    targets = torch.nan_to_num(node_targets.detach().float(), nan=0.0, posinf=0.0, neginf=0.0)
+    weights = torch.nan_to_num(node_weights.detach().float(), nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+    raw_norm = float(torch.linalg.vector_norm(raw).item())
+    if raw.numel() == 0:
+        return raw.contiguous(), raw_norm, 0.0, 0.0
+    if weights.ndim == 1 and weights.numel() == raw.shape[0] and float(weights.sum().item()) > float(eps):
+        w = weights / weights.sum().clamp_min(float(eps))
+        centered = raw - w.unsqueeze(0) @ raw
+    else:
+        centered = raw - raw.mean(dim=0, keepdim=True)
+    centered_norm = float(torch.linalg.vector_norm(centered).item())
+    target_norms = torch.linalg.vector_norm(targets, dim=1) if targets.ndim == 2 and targets.shape[0] > 0 else torch.empty(0)
+    target_norms = target_norms[target_norms > float(eps)]
+    if target_norms.numel() > 0:
+        cap = float(cap_multiplier) * float(torch.quantile(target_norms, 0.75).item())
+    else:
+        cap = 0.0
+    if cap > float(eps):
+        row_norms = torch.linalg.vector_norm(centered, dim=1, keepdim=True)
+        centered = centered * torch.clamp(torch.tensor(cap, dtype=torch.float32) / row_norms.clamp_min(float(eps)), max=1.0)
+    else:
+        centered = torch.zeros_like(centered)
+    return centered.contiguous(), raw_norm, centered_norm, float(cap)
+
+
+def _tagce_low_frequency_node_modes(
+    incidence: torch.Tensor,
+    *,
+    rank: int,
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    """Return smooth non-constant graph node modes as rows [rank, nodes]."""
+
+    if rank <= 0 or incidence.numel() == 0 or incidence.shape[1] < 2:
+        return torch.empty(0, incidence.shape[1] if incidence.ndim == 2 else 0, dtype=torch.float32)
+    b = torch.nan_to_num(incidence.detach().float(), nan=0.0, posinf=0.0, neginf=0.0)
+    lap = 0.5 * (b.T @ b + (b.T @ b).T)
+    try:
+        evals, evecs = torch.linalg.eigh(lap)
+    except RuntimeError:
+        return torch.empty(0, b.shape[1], dtype=torch.float32)
+    if evals.numel() == 0:
+        return torch.empty(0, b.shape[1], dtype=torch.float32)
+    threshold = max(float(eps), float(evals.max().item()) * 1e-5)
+    idx = torch.nonzero(evals > threshold, as_tuple=False).flatten()
+    if idx.numel() == 0:
+        idx = torch.arange(1, evals.numel())
+    idx = idx[: max(0, int(rank))]
+    if idx.numel() == 0:
+        return torch.empty(0, b.shape[1], dtype=torch.float32)
+    modes = evecs[:, idx].T.contiguous()
+    modes = torch.nan_to_num(modes, nan=0.0, posinf=0.0, neginf=0.0)
+    row_norms = torch.linalg.vector_norm(modes, dim=1, keepdim=True)
+    return (modes / row_norms.clamp_min(float(eps))).contiguous()
 
 
 def _tagce_edge_nuisance_basis(
@@ -4498,6 +4565,10 @@ def tag_ce_purify_update(
     ambient_key_rank: int = 16,
     eta_ambient: float = 0.25,
     eta_posture_ambient: float = 1.0,
+    anchor_weight: float = 0.0,
+    potential_weight: float = 0.0,
+    lowfreq_weight: float = 0.0,
+    lowfreq_rank: int = 4,
     negative_weight: float = 20.0,
     ridge: float = 1e-3,
     layer_veto_budget: float = 0.75,
@@ -4554,11 +4625,13 @@ def tag_ce_purify_update(
         return TagCeResult(update=update_f.contiguous(), diagnostics=diagnostics)
     k_obj = k[node_idx]
     y_obj = y[node_idx]
+    w_obj = w[node_idx].clamp_min(0.0)
+    w_obj = w_obj / w_obj.sum().clamp_min(float(eps))
     if shuffle_incidence and b_obj.shape[1] > 1:
         b_obj = b_obj[:, torch.roll(torch.arange(b_obj.shape[1]), shifts=1)]
     x_obj = b_obj @ k_obj
     d_raw = b_obj @ y_obj
-    d_star, cycle_residual = _tagce_settle_edge_target(
+    d_star, node_potential_raw, cycle_residual = _tagce_settle_edge_target(
         b_obj,
         x_obj,
         d_raw,
@@ -4569,6 +4642,13 @@ def tag_ce_purify_update(
     )
     if shuffle_edge_targets and d_star.shape[0] > 1:
         d_star = torch.roll(d_star, shifts=1, dims=0)
+        node_potential_raw = torch.roll(node_potential_raw, shifts=1, dims=0)
+    node_potential, node_potential_raw_norm, node_potential_centered_norm, node_potential_cap = (
+        _tagce_condition_node_potential(node_potential_raw, y_obj, w_obj, eps=eps)
+    )
+    lowfreq_modes = _tagce_low_frequency_node_modes(b_obj, rank=lowfreq_rank, eps=eps)
+    lowfreq_keys = lowfreq_modes @ k_obj if lowfreq_modes.numel() > 0 else torch.empty(0, d_ff)
+    lowfreq_targets = lowfreq_modes @ y_obj if lowfreq_modes.numel() > 0 else torch.empty(0, d_model)
 
     row_scores = _token_row_surprise(all_k, layer)
     threshold = torch.quantile(row_scores, min(max(float(low_surprise_quantile), 0.0), 1.0))
@@ -4625,6 +4705,18 @@ def tag_ce_purify_update(
     if disable_schur or posture_basis.numel() == 0:
         rows = [x_obj]
         vals = [d_star]
+        if anchor_weight > 0:
+            anchor_scale = float(anchor_weight) ** 0.5
+            rows.append(anchor_scale * (w_obj.unsqueeze(0) @ k_obj))
+            vals.append(anchor_scale * (w_obj.unsqueeze(0) @ y_obj))
+        if potential_weight > 0:
+            potential_scale = float(potential_weight) ** 0.5
+            rows.append(potential_scale * k_obj)
+            vals.append(potential_scale * node_potential)
+        if lowfreq_weight > 0 and lowfreq_keys.numel() > 0:
+            lowfreq_scale = float(lowfreq_weight) ** 0.5
+            rows.append(lowfreq_scale * lowfreq_keys)
+            vals.append(lowfreq_scale * lowfreq_targets)
         append_neg_blocks(rows, vals, d_model, eta_ambient)
         m_tag = _tagce_ridge_map(rows, vals, ridge=ridge, eps=eps)
         posture_absorbed = torch.zeros_like(d_star)
@@ -4654,11 +4746,69 @@ def tag_ce_purify_update(
 
         rows_perp = [x_obj]
         vals_perp = [d_perp]
+        anchor_key = w_obj.unsqueeze(0) @ k_obj
+        anchor_target = w_obj.unsqueeze(0) @ y_obj
+        if anchor_weight > 0:
+            anchor_scale = float(anchor_weight) ** 0.5
+            anchor_posture_coeff = anchor_target @ p.T
+            anchor_perp = anchor_target - anchor_posture_coeff @ p
+            rows_perp.append(anchor_scale * anchor_key)
+            vals_perp.append(anchor_scale * anchor_perp)
+        if potential_weight > 0:
+            potential_scale = float(potential_weight) ** 0.5
+            potential_posture_coeff = node_potential @ p.T
+            potential_perp = node_potential - potential_posture_coeff @ p
+            rows_perp.append(potential_scale * k_obj)
+            vals_perp.append(potential_scale * potential_perp)
+        if lowfreq_weight > 0 and lowfreq_keys.numel() > 0:
+            lowfreq_scale = float(lowfreq_weight) ** 0.5
+            lowfreq_posture_coeff = lowfreq_targets @ p.T
+            lowfreq_perp = lowfreq_targets - lowfreq_posture_coeff @ p
+            rows_perp.append(lowfreq_scale * lowfreq_keys)
+            vals_perp.append(lowfreq_scale * lowfreq_perp)
         append_neg_blocks(rows_perp, vals_perp, d_model, eta_ambient)
         m_perp = _tagce_ridge_map(rows_perp, vals_perp, ridge=ridge, eps=eps)
 
         rows_posture = [x_posture]
         vals_posture = [d_posture_resid]
+        if anchor_weight > 0:
+            anchor_scale = float(anchor_weight) ** 0.5
+            generic_basis = _fast_basis_with_rows(
+                k_amb if k_amb.numel() > 0 else all_k[low_mask],
+                max(1, int(ambient_key_rank)),
+                d_ff,
+            )
+            if generic_basis.numel() > 0:
+                anchor_key_posture = anchor_key - (anchor_key @ generic_basis.T) @ generic_basis
+            else:
+                anchor_key_posture = anchor_key
+            if float(torch.linalg.vector_norm(anchor_key_posture).item()) > float(eps):
+                rows_posture.append(anchor_scale * anchor_key_posture)
+                vals_posture.append(anchor_scale * anchor_posture_coeff)
+        if potential_weight > 0:
+            potential_scale = float(potential_weight) ** 0.5
+            potential_posture_coeff = node_potential @ p.T
+            if s_basis.numel() > 0:
+                potential_posture_coeff = potential_posture_coeff - (b_obj.T @ s_basis) @ (
+                    s_basis.T @ b_obj @ potential_posture_coeff
+                )
+            rows_posture.append(potential_scale * k_obj)
+            vals_posture.append(potential_scale * potential_posture_coeff)
+        if lowfreq_weight > 0 and lowfreq_keys.numel() > 0:
+            lowfreq_scale = float(lowfreq_weight) ** 0.5
+            lowfreq_posture_coeff = lowfreq_targets @ p.T
+            generic_basis = _fast_basis_with_rows(
+                k_amb if k_amb.numel() > 0 else all_k[low_mask],
+                max(1, int(ambient_key_rank)),
+                d_ff,
+            )
+            if generic_basis.numel() > 0:
+                lowfreq_key_posture = lowfreq_keys - (lowfreq_keys @ generic_basis.T) @ generic_basis
+            else:
+                lowfreq_key_posture = lowfreq_keys
+            if float(torch.linalg.vector_norm(lowfreq_key_posture).item()) > float(eps):
+                rows_posture.append(lowfreq_scale * lowfreq_key_posture)
+                vals_posture.append(lowfreq_scale * lowfreq_posture_coeff)
         append_neg_blocks(rows_posture, vals_posture, p.shape[0], eta_posture_ambient)
         theta_posture = _tagce_ridge_map(rows_posture, vals_posture, ridge=max(float(ridge) * 2.0, float(eps)), eps=eps)
         m_tag = m_perp + theta_posture @ p
@@ -4710,6 +4860,20 @@ def tag_ce_purify_update(
                     / torch.linalg.vector_norm(d_star).square().clamp_min(float(eps))
                 ).item()
             ),
+            "tag_ce_anchor_weight": float(anchor_weight),
+            "tag_ce_potential_weight": float(potential_weight),
+            "tag_ce_lowfreq_weight": float(lowfreq_weight),
+            "tag_ce_lowfreq_rank": float(lowfreq_modes.shape[0]) if lowfreq_modes.ndim == 2 else 0.0,
+            "tag_ce_anchor_key_norm": float(torch.linalg.vector_norm(w_obj.unsqueeze(0) @ k_obj).item()),
+            "tag_ce_anchor_target_norm": float(torch.linalg.vector_norm(w_obj.unsqueeze(0) @ y_obj).item()),
+            "tag_ce_node_potential_norm": float(torch.linalg.vector_norm(node_potential).item()),
+            "tag_ce_node_potential_raw_norm": float(node_potential_raw_norm),
+            "tag_ce_node_potential_centered_norm": float(node_potential_centered_norm),
+            "tag_ce_node_potential_cap": float(node_potential_cap),
+            "tag_ce_lowfreq_key_norm": float(torch.linalg.vector_norm(lowfreq_keys).item()) if lowfreq_keys.numel() > 0 else 0.0,
+            "tag_ce_lowfreq_target_norm": float(torch.linalg.vector_norm(lowfreq_targets).item())
+            if lowfreq_targets.numel() > 0
+            else 0.0,
             "tag_ce_layer_scale": float(scale.item()),
             "tag_ce_disable_schur": 1.0 if disable_schur else 0.0,
             "tag_ce_disable_graph_settle": 1.0 if disable_graph_settle else 0.0,
