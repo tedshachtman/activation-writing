@@ -7942,6 +7942,12 @@ Additional local conclusions:
   and is unsafe (`2` c2w, drop `4.588`). The teacher-filtered item set is not
   identical across these runs, but the result says Vomar's `0/4` is not clean
   evidence that DICE is suppressing an otherwise learnable second task.
+- Seldic-only controls point the same way. Strict key-effect DICE gets `0/4`,
+  `0` c2w, drop `0.079`, with mean final Frobenius `0.587`. Raw relational on
+  Seldic also fails to improve over baseline (`1/4 -> 1/4`) and is very unsafe
+  (`2` c2w, before-correct drop `5.359`). So the non-Lyran four-item local
+  gates are weak acquisition screens for this base write; they are useful for
+  safety, but not reliable evidence of DICE suppressing a learnable payload.
 
 Two-task teacher-filtered local gate:
 
@@ -7975,6 +7981,11 @@ Interpretation:
   first-write Vomar and `0.758` for second-write Lyran. So this is not mainly
   an old-key-negative-style collapse of the second write. The small Vomar
   teacher-filtered gate is a weak acquisition target for this coordinate.
+- Seldic-only raw and DICE controls confirm that the current local four-item
+  gate is brittle: raw can be highly unsafe without acquiring, and DICE can be
+  safe without proving whether it lost a real learnable payload. Future
+  coordinate work should either use a more stable acquisition screen or select
+  a split where raw relational consistently improves over baseline.
 - The next refinement should preserve DICE anti-support's posture cancellation
   while recovering more threshold mass. Raw coordinate support is too sparse;
   SVD support is too conservative. The missing object is likely a structured

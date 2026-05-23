@@ -3100,6 +3100,12 @@ Follow-up local findings:
   teacher-filtered items differ across those controls, so this is not a perfect
   apples-to-apples comparison, but Vomar is clearly a weak local acquisition
   target here.
+- Seldic-only controls point the same way. Strict key-effect DICE gets `0/4`,
+  `0` c2w, drop `0.079`, with mean final Frobenius `0.587`. Raw relational on
+  Seldic also fails to improve over baseline (`1/4 -> 1/4`) and is very unsafe
+  (`2` c2w, before-correct drop `5.359`). So the non-Lyran four-item local
+  gates are weak acquisition screens for this base write; they are useful for
+  safety but not reliable evidence of DICE suppressing a learnable payload.
 
 Two-task teacher-filtered local gate:
 
@@ -3124,6 +3130,12 @@ mass but are not clean enough. Key-effect support is currently the cleanest
 DICE coordinate, but it only preserves a small shard; this points to missing
 relational role/effect alignment, target-token grouping, or key-effect
 edgelets rather than simply insufficient update mass.
+
+The practical benchmark lesson: the current local four-item gate is brittle.
+For future DICE-coordinate comparisons, either use a more stable acquisition
+screen or pick a split where raw relational consistently improves over
+baseline. Otherwise a safe `0/4` result cannot distinguish "DICE removed the
+payload" from "the raw payload did not acquire on this split either."
 
 I added a full reduced-benchmark preset:
 
