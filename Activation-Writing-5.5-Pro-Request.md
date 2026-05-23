@@ -161,12 +161,59 @@ This suggests:
 - the fast preset now defaults to centroid-anchor-only. `--tagce-potential-weight`
   and `--tagce-lowfreq-weight` remain only as ablation knobs.
 
-New live question: how should we reintroduce graph-constant or low-frequency
-node information, which may carry threshold/acquisition signal, without writing
-generic posture/default drift? A good answer may use component centroids,
-explicitly object-conditioned low-frequency modes, Schur-residualized node
-modes, or cross-context invariant graph modes, but the naive full node
-potential and naive low-frequency modes are not safe.
+### Latest Acquisition Gate: TAG-CE v1 Fails, DICE Anti-Support Works Locally
+
+I then ran a one-task teacher-filtered local MPS gate where raw relational does
+acquire, so this is acquisition-informative:
+
+- one task: Lyran;
+- teacher-filtered `4` eval items from `20` candidates;
+- layers `4 8 12 16 20 24 27`;
+- `6` lessons, `8` examples/lesson;
+- core sentinel suite.
+
+Results:
+
+| Run | Baseline | Context | Edited | c2w | before-correct drop |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| raw relational | `1/4` | `4/4` | `2/4` | `0` | `2.812` |
+| Q-RICO residual filter | `1/4` | `4/4` | `2/4` | `1` | `2.947` |
+| TAG-CE centroid, relaxed/no-veto | `1/4` | `4/4` | `0/4` | `0` | `5.836` |
+| TAG-CE centroid, default/veto | `1/4` | `4/4` | `0/4` | `1` | `1.609` |
+| TAG-CE centroid, Schur off | `1/4` | `4/4` | `1/4` | `2` | `6.777` |
+
+So TAG-CE v1 is locally falsified as an acquisition method. Schur-off does not
+restore acquisition, so the edge-lifted target itself is losing the
+threshold-crossing component.
+
+I then tested the user's diverse-context/DICE hypothesis on the unsafe direct
+relational write:
+
+| Run | Baseline | Context | Edited | c2w | before-correct drop |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| raw standard lessons | `1/4` | `4/4` | `2/4` | `0` | `2.812` |
+| DICE raw, `4` diverse contexts | `0/4` | `4/4` | `1/4` | `1` | `1.068` |
+| DICE raw, `8` diverse contexts | `1/4` | `4/4` | `1/4` | `1` | `0.460` |
+| DICE raw, `4` diverse + `4` rival-language anti contexts | `0/4` | `4/4` | `1/4` | `0` | `0.056` |
+
+The DICE anti-support result is now the most promising local result:
+
+- nonzero acquisition over baseline;
+- zero sentinel c2w;
+- near-zero sentinel margin drift;
+- no sidecar state after the write; contexts are only used during current write
+  construction.
+
+I added a benchmark preset:
+
+```text
+dice_relational_raw_anti_fast
+```
+
+New live question: focus on the multi-context invariant-write direction unless
+you see a strong reason not to. How do we make DICE anti-support into a stronger
+closed-form semantic-invariance method that applies to unsafe acquisition-bearing
+maps without raw-coordinate consensus deleting the threshold component?
 
 ### Hard Constraints
 

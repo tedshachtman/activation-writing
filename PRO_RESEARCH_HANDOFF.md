@@ -2990,3 +2990,87 @@ A better answer might use component centroids, explicitly object-conditioned
 low-frequency modes, Schur-residualized node modes, or cross-context/DICE-style
 invariant graph modes, but it must avoid becoming another generic posture
 write.
+
+## Postscript 13: Acquisition Gate Falsifies TAG-CE v1; DICE Anti-Support Looks Promising
+
+I ran a one-task teacher-filtered local MPS gate on the same 7 representative
+layers. This is not the full benchmark, but raw relational acquires on it, so
+it is acquisition-informative.
+
+Shared setup:
+
+- one task: Lyran;
+- teacher-filtered `4` eval items from `20` candidates;
+- baseline/context for standard lesson context: `1/4 -> 4/4`;
+- layers `4 8 12 16 20 24 27`;
+- `6` lessons, `8` examples/lesson;
+- core sentinel suite.
+
+Results:
+
+| Run | Baseline | Context | Edited | c2w | before-correct drop |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| raw relational | `1/4` | `4/4` | `2/4` | `0` | `2.812` |
+| Q-RICO residual filter | `1/4` | `4/4` | `2/4` | `1` | `2.947` |
+| TAG-CE centroid, relaxed/no-veto | `1/4` | `4/4` | `0/4` | `0` | `5.836` |
+| TAG-CE centroid, default/veto | `1/4` | `4/4` | `0/4` | `1` | `1.609` |
+| TAG-CE centroid, Schur off | `1/4` | `4/4` | `1/4` | `2` | `6.777` |
+
+Interpretation:
+
+- TAG-CE v1 is currently falsified as an acquisition method. The local safety
+  screen was misleading because raw did not acquire there.
+- Schur absorption is not the only culprit: Schur-off still fails to beat
+  baseline and is highly unsafe.
+- The edge-lifted target itself is losing the threshold-crossing component.
+- The acquisition-bearing scaffold remains direct relational/Q-RICO-style
+  context-value writing.
+
+I then tested the user's multi-context "codenames" hypothesis on the unsafe
+direct relational write. These DICE runs use diverse renderings during the
+current write only; no sidecar state is available between future tasks.
+
+| Run | Baseline | Context | Edited | c2w | before-correct drop |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| raw standard lessons | `1/4` | `4/4` | `2/4` | `0` | `2.812` |
+| DICE raw, `4` diverse contexts | `0/4` | `4/4` | `1/4` | `1` | `1.068` |
+| DICE raw, `8` diverse contexts | `1/4` | `4/4` | `1/4` | `1` | `0.460` |
+| DICE raw, `4` diverse + `4` rival-language anti contexts | `0/4` | `4/4` | `1/4` | `0` | `0.056` |
+
+This is now the most promising local result:
+
+- nonzero acquisition over baseline (`0/4 -> 1/4`);
+- zero sentinel c2w;
+- almost no before-correct sentinel margin drift (`0.056`);
+- final applied update Frobenius is small but not inert (`~0.797` mean across
+  layers);
+- same-format rival-language anti-support appears to remove the generic
+  translation/task posture better than same-language support alone.
+
+I added a full reduced-benchmark preset:
+
+```text
+dice_relational_raw_anti_fast
+```
+
+New ask:
+
+Please treat TAG-CE v1 as locally falsified for acquisition and focus on the
+multi-context invariant-write direction unless you see a strong reason not to.
+The key question is how to turn DICE anti-support from a sparse coordinate
+consensus heuristic into a stronger closed-form semantic-invariance method
+while preserving the hard constraints:
+
+- contexts used for the write are allowed, but no memory/sidecar survives after
+  the weights are written;
+- no labels, sentinels, probes, null prompts, SAE, RAG, router, or task ID;
+- final mechanism must pass sequentially by updated weights only;
+- primary target is two-task acquisition/retention plus sentinel preservation.
+
+Specifically, propose the next implementable refinement around:
+
+1. diverse same-language support;
+2. same-format rival-language anti-support;
+3. applying the method to unsafe acquisition-bearing maps such as direct
+   relational context-value and ORCA residual-only;
+4. avoiding raw-coordinate consensus deleting the threshold component.

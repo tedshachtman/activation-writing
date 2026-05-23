@@ -7809,3 +7809,93 @@ writing the raw graph potential. Candidate directions:
 3. Test TAG-CE only on an acquisition-informative fixture next: teacher-filtered
    CUDA/Modal `tag_ce_fast` versus raw/Q-RICO. The local no-teacher MPS screen
    can only say that centroid TAG-CE is safer than raw at matched fixture scale.
+
+### Teacher-Filtered Local Acquisition Gate
+
+I then ran a one-task teacher-filtered MPS gate to check acquisition on the same
+7 representative layers. This still is not the full benchmark, but unlike the
+tiny no-teacher screen, raw relational does acquire, so it is informative.
+
+Shared setup:
+
+- one task: Lyran
+- teacher-filtered `4` eval items from `20` candidates
+- baseline/context for the standard lesson context: `1/4 -> 4/4`
+- layers: `4 8 12 16 20 24 27`
+- `6` lessons, `8` examples/lesson
+- core sentinel suite
+
+Results:
+
+| Run | Baseline | Context | Edited | c2w | before-correct drop |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| raw relational | `1/4` | `4/4` | `2/4` | `0` | `2.812` |
+| Q-RICO residual filter | `1/4` | `4/4` | `2/4` | `1` | `2.947` |
+| TAG-CE centroid, relaxed/no-veto | `1/4` | `4/4` | `0/4` | `0` | `5.836` |
+| TAG-CE centroid, default/veto | `1/4` | `4/4` | `0/4` | `1` | `1.609` |
+| TAG-CE centroid, Schur off | `1/4` | `4/4` | `1/4` | `2` | `6.777` |
+
+Interpretation:
+
+- TAG-CE is currently falsified as an acquisition method on the local
+  teacher-filtered gate. Relaxed TAG-CE deletes acquisition and worsens margin
+  drift; default/veto TAG-CE is safer by scale-down but still has a c2w and no
+  acquisition; Schur-off does not restore acquisition and is highly unsafe.
+- This implies the edge-lifted target itself loses the threshold-crossing
+  component. The Schur absorber is not the only culprit.
+- The acquisition-bearing local scaffold remains raw relational/Q-RICO-style
+  direct context-value writing. The next search should apply global/diverse
+  invariance to those unsafe acquiring maps, rather than trying to salvage
+  TAG-CE v1.
+
+### DICE On Unsafe Acquiring Relational Writes
+
+Following the multi-context hypothesis, I tested diverse-context support on the
+direct relational context-value write, which is unsafe but acquisition-bearing.
+These runs use multiple diverse renderings of the same Lyran lesson and defer
+application until the ensemble support/anti-support gate is computed. The
+benchmark still passes only updated weights after a write; DICE contexts are
+part of the current write construction, not sidecar state.
+
+Local one-task teacher-filtered gate:
+
+| Run | Baseline | Context | Edited | c2w | before-correct drop |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| raw standard lessons | `1/4` | `4/4` | `2/4` | `0` | `2.812` |
+| DICE raw, `4` diverse contexts | `0/4` | `4/4` | `1/4` | `1` | `1.068` |
+| DICE raw, `8` diverse contexts | `1/4` | `4/4` | `1/4` | `1` | `0.460` |
+| DICE raw, `4` diverse + `4` rival-language anti contexts | `0/4` | `4/4` | `1/4` | `0` | `0.056` |
+
+The DICE anti-support result is the first positive result in this branch:
+
+- nonzero acquisition over baseline (`0/4 -> 1/4`);
+- zero sentinel c2w;
+- near-zero before-correct margin damage (`0.056`);
+- applied update Frobenius is much smaller than raw, but not inert.
+
+Diagnostics from the DICE anti run:
+
+- `dice_context_count=4`, `dice_anti_context_count=4`
+- mean final applied update Frobenius: `0.797`
+- mean proposal cosine: `0.204`
+- mean support is sparse: high-support fraction around `0.006`
+- anti-support reduces the gate and update norm enough to remove sentinel
+  damage while keeping one item of acquisition.
+
+Interpretation:
+
+This supports the user's "codenames contexts" hypothesis more than the TAG-CE
+branch. Plain more-context DICE improves margin damage but can lose acquisition.
+Adding same-format rival-language anti-support is the important move: it
+directly attacks translation/task posture while preserving a small
+language-specific invariant write.
+
+I added a full reduced-benchmark preset:
+
+```text
+dice_relational_raw_anti_fast
+```
+
+Next experiment should be the CUDA/Modal-style two-task reduced benchmark for
+`dice_relational_raw_anti_fast`, compared against raw, Q-RICO, and DICE raw
+without anti-support. If it scales, this is a stronger path than TAG-CE v1.
