@@ -118,6 +118,62 @@ def test_dice_support_consensus_keeps_repeated_sign_coordinate():
     assert stats["dice_high_support_fraction"] < 1.0
 
 
+def test_dice_svd_support_reconstructs_shared_proposal_mode():
+    shared = torch.tensor([[1.0, -0.5], [0.25, 0.75]])
+    nuisance = torch.tensor([[0.0, 1.0], [-1.0, 0.0]])
+    updates = [
+        shared + nuisance,
+        1.1 * shared - nuisance,
+        0.9 * shared + 0.5 * nuisance,
+        shared - 0.5 * nuisance,
+    ]
+    final, stats = dice_support_consensus_update(
+        updates,
+        support_space="svd",
+        subspace_rank=2,
+        support_threshold=0.75,
+        support_temperature=16.0,
+        support_strength=0.0,
+    )
+    assert stats["dice_support_space_is_svd"] == 1.0
+    assert stats["dice_subspace_rank"] == 2.0
+    assert stats["dice_subspace_energy_fraction"] > 0.5
+    assert torch.linalg.vector_norm(final) > 0.1
+
+
+def test_dice_anti_support_suppresses_rival_shared_coordinate():
+    updates = [
+        torch.tensor([[1.0, 0.2]]),
+        torch.tensor([[1.1, -0.2]]),
+        torch.tensor([[0.9, 0.2]]),
+        torch.tensor([[1.0, -0.2]]),
+    ]
+    anti_updates = [
+        torch.tensor([[1.0, 0.0]]),
+        torch.tensor([[1.0, 0.0]]),
+        torch.tensor([[1.0, 0.0]]),
+        torch.tensor([[1.0, 0.0]]),
+    ]
+    without_anti, _ = dice_support_consensus_update(
+        updates,
+        support_threshold=0.75,
+        support_temperature=20.0,
+        support_strength=0.0,
+    )
+    with_anti, stats = dice_support_consensus_update(
+        updates,
+        anti_updates=anti_updates,
+        support_threshold=0.75,
+        support_temperature=20.0,
+        support_strength=0.0,
+        anti_threshold=0.50,
+        anti_temperature=12.0,
+        anti_strength=1.0,
+    )
+    assert stats["dice_anti_context_count"] == 4.0
+    assert abs(with_anti[0, 0]) < abs(without_anti[0, 0])
+
+
 def test_diverse_task_lesson_variants_change_surface_frame():
     profile = task_profile(0)
     variants = [

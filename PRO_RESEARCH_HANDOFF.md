@@ -1,4 +1,4 @@
-# Request For GPT-5.5 Pro: One-Pass Surprise Consolidation After DICE Fast Sweep
+# Request For GPT-5.5 Pro: One-Pass Surprise Consolidation After DICE Coordinate Follow-Up
 
 Date: 2026-05-22
 
@@ -9,11 +9,114 @@ Audience: GPT-5.5 Pro. I am giving you two files:
 2. This file: the current prompt/request. Please read the full research log
    first, then answer this prompt.
 
-## 2026-05-22 Update: DICE Diverse Invariant Context Ensemble
+## 2026-05-22 Update: DICE Coordinate Follow-Up
 
 Please treat this update as the current live state. The TDMI-Q, TRACE-Q,
 PRISM-Q, and SEAL-Q sections below are retained for continuity, and the full
 research log is attached separately.
+
+After the first DICE sweep, I implemented the two obvious coordinate
+follow-ups:
+
+1. support over shared proposal SVD modes instead of raw weight coordinates;
+2. rival-language anti-support contexts, to subtract translation/lesson posture
+   that appears in same-format but different-language writes.
+
+### SVD Support
+
+Implementation:
+
+- `--dice-support-space svd`;
+- stack diverse-context proposal updates;
+- take SVD of the proposal matrix;
+- compute sign support over proposal coefficients;
+- reconstruct only gated high-support modes.
+
+Results on the reduced two-task fast fixture:
+
+| Preset | Support coordinate | Rank | Task0 after task0 | Sentinel c2w after task0 | Drop after task0 | Mean update Fro |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| `dice_qrico_strict_fast` | raw coordinate | n/a | `1/4` | `0` | `0.104` | `0.912` |
+| `dice_qrico_svd_fast` | proposal SVD | `6` | `1/4` | `2` | `0.998` | `2.308` |
+| `dice_qrico_svd_strict_fast` | proposal SVD | `4` | `1/4` | `2` | `0.875` | `2.042` |
+
+Interpretation: proposal SVD support is too broad. It recovers update mass, but
+the recovered mass is unsafe and still does not improve task0. This falsifies
+plain proposal-SVD modes as the better DICE coordinate.
+
+### Rival Anti-Support
+
+Implementation:
+
+- `--dice-anti-contexts`;
+- render rival-language contexts during the same write construction;
+- compute anti-proposal updates;
+- suppress positive coordinates whose common sign also appears in the rival
+  anti-support proposals;
+- no rival context or anti-support state is stored after the write.
+
+Results:
+
+| Preset | Positive contexts | Anti contexts | Anti gate mean | Task0 after task0 | Task1 after task1 | Sentinel c2w after task0 | Sentinel c2w after task1 | Mean update Fro |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `dice_qrico_anti_fast` | `8` | `8` | `0.261` | `1/4` | `0/4` | `0` | `0` | `0.418` |
+| `dice_qrico_anti_strict_fast` | `12` | `8` | `0.263` | `1/4` | `2/4` | `0` | `0` | `0.294` |
+| `dice_anti_light` | `8` | `8` | `0.644` | `1/4` | `0/4` | `0` | `2` | `0.858` |
+
+Interpretation: raw coordinate anti-support is a strong safety brake, but it
+subtracts too much useful mapping signal. Making it lighter restores update
+mass but c2w comes back. There is no obvious scalar anti-support band in raw
+coordinates.
+
+### Updated DICE Conclusion
+
+The diverse-context idea is safety-relevant but still under-acquires:
+
+- raw coordinate high-support is clean but too weak;
+- proposal-SVD support is broader and unsafe;
+- raw coordinate anti-support is cleaner but even weaker;
+- lighter anti-support loses the safety benefit.
+
+The next plausible DICE coordinate is not raw entries and not global SVD modes.
+It should be **key-conditioned input-output maplets**: support over recurring
+effects of selected relational keys into target/value directions, with
+anti-support subtracting effects that recur under rival-language contexts.
+
+Concretely, for each proposal context \(c\):
+
+\[
+e_{c,i}=k_{c,i}M_c,\qquad
+\phi_{c,i}=(\text{key cluster},\text{target/value direction}).
+\]
+
+Support should count recurring key-target effects for the same lexical or
+relation cluster across diverse contexts. Anti-support should subtract
+key-target effects that recur in rival contexts with different source tokens.
+
+### Current Ask
+
+Please propose the next implementable DICE-style tool.
+
+It must be specific enough to implement: tensors, objectives, closed-form
+solve, required diagnostics, first runs, ablations, and falsification criteria.
+
+Please address:
+
+1. What is the right key-conditioned support coordinate, given that raw
+   coordinates are too conservative and SVD modes are unsafe?
+2. How should rival-language anti-support be matched to positive contexts so
+   it subtracts translation posture but not true lexical/grammar binding?
+3. Should maplet support wrap Q-RICO residual-filter proposals, or should it
+   operate on raw relational/context-value proposals before Q-RICO?
+4. What exact reduced-fixture pass bar should determine promotion to the full
+   two-task benchmark?
+5. What ablation would distinguish "DICE learned the invariant language object"
+   from "DICE is just a smaller update norm"?
+
+## 2026-05-22 Update: DICE Diverse Invariant Context Ensemble
+
+This older section is retained for continuity. The coordinate follow-up above
+is the current live state.
 
 User hypothesis: previous ensemble attempts mostly combined multiple
 translation-lesson renderings, so their shared direction still included

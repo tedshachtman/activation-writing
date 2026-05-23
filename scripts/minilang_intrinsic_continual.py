@@ -168,11 +168,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--intrinsic-surprise-birth-trigger-ridge", type=float, default=1e-3)
     parser.add_argument("--write-only-final", action="store_true")
     parser.add_argument("--dice-defer-apply", action="store_true")
+    parser.add_argument("--dice-support-space", choices=["coordinate", "svd"], default="coordinate")
+    parser.add_argument("--dice-subspace-rank", type=int, default=8)
     parser.add_argument("--dice-support-threshold", type=float, default=0.75)
     parser.add_argument("--dice-support-temperature", type=float, default=16.0)
     parser.add_argument("--dice-support-strength", type=float, default=1.0)
     parser.add_argument("--dice-support-cap", type=float, default=2.0)
     parser.add_argument("--dice-support-floor", type=float, default=0.0)
+    parser.add_argument("--dice-anti-contexts", type=int, default=0)
+    parser.add_argument("--dice-anti-profile-offset", type=int, default=4)
+    parser.add_argument("--dice-anti-threshold", type=float, default=0.50)
+    parser.add_argument("--dice-anti-temperature", type=float, default=12.0)
+    parser.add_argument("--dice-anti-strength", type=float, default=1.0)
     parser.add_argument("--memory-gate", action="store_true")
     parser.add_argument("--memory-gate-final-token-only", action="store_true")
     parser.add_argument("--memory-gate-threshold", type=float, default=0.95)
@@ -377,6 +384,7 @@ def main() -> None:
     profiles = [task_profile(idx) for idx in range(args.tasks)]
     final_lesson_idx = args.lessons_per_task - 1
     lesson_texts: list[list[str]] = []
+    dice_anti_lesson_texts: list[list[str]] = []
     contexts: list[str] = []
     eval_sets = []
     filter_stats: list[dict] = []
@@ -398,6 +406,22 @@ def main() -> None:
                 for lesson_idx in range(args.lessons_per_task)
             ]
         lesson_texts.append(task_lessons)
+        if args.dice_anti_contexts > 0:
+            anti_profile = task_profile(profile.idx + args.dice_anti_profile_offset)
+            dice_anti_lesson_texts.append(
+                [
+                    render_task_lesson_variant(
+                        anti_profile,
+                        final_lesson_idx,
+                        args.lesson_examples,
+                        args.seed + 777_001,
+                        variant_idx,
+                    )
+                    for variant_idx in range(args.dice_anti_contexts)
+                ]
+            )
+        else:
+            dice_anti_lesson_texts.append([])
         contexts.append("\n\n".join(task_lessons))
         for idx, text in enumerate(task_lessons):
             append_jsonl(
@@ -407,6 +431,17 @@ def main() -> None:
                     "language": profile.name,
                     "lesson_idx": idx,
                     "render_mode": "dice_diverse" if args.dice_diverse_contexts > 0 else "standard",
+                    "text": text,
+                },
+            )
+        for idx, text in enumerate(dice_anti_lesson_texts[-1]):
+            append_jsonl(
+                lessons_path,
+                {
+                    "task_idx": profile.idx,
+                    "language": profile.name,
+                    "lesson_idx": idx,
+                    "render_mode": "dice_anti",
                     "text": text,
                 },
             )
@@ -555,6 +590,7 @@ def main() -> None:
             device,
             updates_path,
             slot_id=None,
+            dice_anti_lesson_texts=dice_anti_lesson_texts[step],
             extra_negative_keys_by_layer=old_negative_keys if args.old_task_negative_keys else None,
             selected_keys_out_by_layer=selected_keys if args.old_task_negative_keys else None,
             max_extra_negative_rows=args.old_task_negative_max_rows,

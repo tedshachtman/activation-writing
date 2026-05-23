@@ -7249,3 +7249,108 @@ Current status:
 DICE is promising as a safety/consolidation idea but not yet a new frontier.
 It deserves one more targeted implementation if we can define support in a
 better coordinate system. Raw coordinate high-support is too conservative.
+
+## 2026-05-22: DICE Coordinate Follow-Up - SVD Support And Rival Anti-Support
+
+Follow-up question: if raw matrix-coordinate support is too conservative, can
+DICE recover acquisition by voting in a better coordinate, or by explicitly
+subtracting translation-posture support from rival-language contexts?
+
+Implemented two variants:
+
+1. `--dice-support-space svd`
+   - stack diverse-context proposal updates;
+   - compute SVD of the proposal matrix;
+   - score sign support over shared proposal coefficients instead of raw
+     weight entries;
+   - reconstruct only gated high-support modes.
+
+2. rival-language anti-support
+   - added `--dice-anti-contexts`;
+   - render same-style diverse contexts for a different invented language;
+   - build anti-proposal updates during the same write construction;
+   - suppress positive coordinates whose common sign also appears in the
+     anti-support proposals;
+   - no anti-support state is stored after the write.
+
+Added presets:
+
+- `dice_qrico_svd_fast`;
+- `dice_qrico_svd_strict_fast`;
+- `dice_qrico_anti_fast`;
+- `dice_qrico_anti_strict_fast`.
+
+Verification:
+
+```bash
+python -m py_compile scripts/minilang_write.py \
+  scripts/minilang_intrinsic_continual.py \
+  scripts/continual_benchmark_grid.py \
+  tests/test_minilang.py
+python -m pytest tests/test_minilang.py -q
+# 14 passed
+```
+
+### Fast Results
+
+Same reduced two-task fixture as the prior DICE sweep.
+
+| Preset | Support space | Anti contexts | Task0 after task0 | Task1 after task1 | Sentinel c2w after task0 | Sentinel c2w after task1 | Drop after task1 | Mean update Fro |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `dice_qrico_strict_fast` | raw coordinate | `0` | `1/4` | `3/4` | `0` | `0` | `0.126` | `0.912` |
+| `dice_qrico_svd_fast` | proposal SVD rank 6 | `0` | `1/4` | n/a | `2` | n/a | n/a | `2.308` |
+| `dice_qrico_svd_strict_fast` | proposal SVD rank 4 | `0` | `1/4` | n/a | `2` | n/a | n/a | `2.042` |
+| `dice_qrico_anti_fast` | raw coordinate | `8` | `1/4` | `0/4` | `0` | `0` | `0.048` | `0.418` |
+| `dice_qrico_anti_strict_fast` | raw coordinate | `8` | `1/4` | `2/4` | `0` | `0` | `0.061` | `0.294` |
+| `dice_anti_light` | raw coordinate | `8` | `1/4` | `0/4` | `0` | `2` | `0.468` | `0.858` |
+
+SVD-support diagnostics:
+
+- SVD rank 6 kept about `72.5%` proposal energy, gate mean `0.396`, update
+  Frobenius `2.31`, and c2w `2`;
+- SVD rank 4 kept about `57.7%` proposal energy, gate mean `0.317`, update
+  Frobenius `2.04`, and c2w `2`;
+- neither improved task0 over baseline.
+
+Interpretation: shared proposal SVD modes are too broad. They recover update
+mass, but the mass is exactly the unsafe component raw coordinate DICE was
+removing. This does not solve the "support coordinate" problem.
+
+Anti-support diagnostics:
+
+- default anti-support drove gate mean to `0.067` / update Frobenius `0.418`;
+- stricter anti-support drove gate mean to `0.031` / update Frobenius `0.294`;
+- both were sentinel-clean but inert;
+- light anti-support raised gate mean to `0.192` / update Frobenius `0.858`,
+  but c2w returned after task1.
+
+Interpretation: raw coordinate anti-support does subtract shared
+translation/posture movement, but it also subtracts much of the useful mapping
+signal. There is not an obvious scalar anti-support band in this raw
+coordinate. It behaves as another safety shrinker.
+
+Current DICE conclusion:
+
+- The user's diverse-context idea is partially validated: high-support
+  intersection and rival anti-support both strongly suppress sentinel damage.
+- Raw matrix coordinates are the wrong support unit for acquisition.
+- Proposal SVD modes are too broad and unsafe.
+- Rival anti-support in raw coordinates is too blunt and inert.
+
+Next DICE-specific move, if continuing this family:
+
+Support and anti-support should be computed over **key-conditioned
+input-output maplets**, not raw coordinates or global SVD modes. Concretely,
+for each proposal, decompose the update by the selected relational key rows:
+
+\[
+e_{c,i}=k_{c,i}M_c,\qquad
+\phi_{c,i}=(\mathrm{key\ cluster}, \mathrm{target/value\ direction}).
+\]
+
+Then support should count recurring key-target effects for the same lexical or
+relation cluster across diverse contexts, while anti-support should subtract
+effects that recur in rival-language contexts with different source tokens.
+That is more expensive to implement but is the coordinate that matches the
+hypothesis. Raw DICE has now done enough to show the idea is safety-relevant
+but underpowered in weight-entry space.

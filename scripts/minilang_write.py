@@ -1622,25 +1622,36 @@ def anchored_directional_update(
 def dice_support_consensus_update(
     updates: list[torch.Tensor],
     *,
+    anti_updates: list[torch.Tensor] | None = None,
+    support_space: str = "coordinate",
+    subspace_rank: int = 8,
     support_threshold: float = 0.75,
     support_temperature: float = 16.0,
     support_strength: float = 1.0,
     support_cap: float = 2.0,
     support_floor: float = 0.0,
+    anti_threshold: float = 0.50,
+    anti_temperature: float = 12.0,
+    anti_strength: float = 1.0,
 ) -> tuple[torch.Tensor, dict[str, float]]:
-    """Coordinate-level high-support consensus across diverse contexts.
+    """High-support consensus across diverse contexts.
 
     DICE is intentionally stricter than the older mean/directional ensembles:
-    each update coordinate is kept only when its sign recurs across many
-    independently rendered contexts. The goal is to preserve invariants shared
-    across diverse contexts while suppressing context-local surface posture.
+    each coordinate or shared proposal mode is kept only when its sign recurs
+    across many independently rendered contexts. The goal is to preserve
+    invariants shared across diverse contexts while suppressing context-local
+    surface posture.
     """
 
     if not updates:
         raise ValueError("dice_support_consensus_update requires at least one update")
+    anti_updates = anti_updates or []
     if len(updates) == 1:
         return updates[0], {
             "dice_context_count": 1.0,
+            "dice_anti_context_count": float(len(anti_updates)),
+            "dice_support_space": support_space,
+            "dice_subspace_rank": 0.0,
             "dice_support_threshold": float(support_threshold),
             "dice_gate_mean": 1.0,
             "dice_high_support_fraction": 1.0,
@@ -1650,10 +1661,49 @@ def dice_support_consensus_update(
         }
 
     stack = torch.stack([update.detach().float().cpu() for update in updates], dim=0)
-    positive = (stack > 0).float().mean(dim=0)
-    negative = (stack < 0).float().mean(dim=0)
-    support = torch.maximum(positive, negative)
-    mean_update = stack.mean(dim=0)
+    flat = stack.flatten(1)
+    anti_flat = (
+        torch.stack([update.detach().float().cpu().flatten() for update in anti_updates], dim=0)
+        if anti_updates
+        else torch.empty(0, flat.shape[1])
+    )
+    support_space = support_space.lower()
+    mode_energy_fraction = 1.0
+    actual_rank = 0
+    if support_space == "coordinate":
+        positive = (stack > 0).float().mean(dim=0)
+        negative = (stack < 0).float().mean(dim=0)
+        support = torch.maximum(positive, negative)
+        mean_update = stack.mean(dim=0)
+        reconstruction_basis = None
+        mean_coeff = None
+        if anti_flat.numel() > 0:
+            anti_stack = anti_flat.reshape(anti_flat.shape[0], *stack.shape[1:])
+            common_sign = torch.sign(mean_update)
+            anti_same = ((torch.sign(anti_stack) == common_sign.unsqueeze(0)) & (common_sign.unsqueeze(0) != 0)).float().mean(dim=0)
+        else:
+            anti_same = torch.zeros_like(support)
+    elif support_space == "svd":
+        rank = max(1, min(int(subspace_rank), flat.shape[0], flat.shape[1]))
+        _u, singular_values, vh = torch.linalg.svd(flat, full_matrices=False)
+        basis = vh[:rank]
+        coeffs = flat @ basis.T
+        positive = (coeffs > 0).float().mean(dim=0)
+        negative = (coeffs < 0).float().mean(dim=0)
+        support = torch.maximum(positive, negative)
+        mean_coeff = coeffs.mean(dim=0)
+        reconstruction_basis = basis
+        actual_rank = rank
+        denom = singular_values.square().sum().clamp_min(1e-12)
+        mode_energy_fraction = float((singular_values[:rank].square().sum() / denom).item())
+        if anti_flat.numel() > 0:
+            anti_coeffs = anti_flat @ basis.T
+            common_sign = torch.sign(mean_coeff)
+            anti_same = ((torch.sign(anti_coeffs) == common_sign.unsqueeze(0)) & (common_sign.unsqueeze(0) != 0)).float().mean(dim=0)
+        else:
+            anti_same = torch.zeros_like(support)
+    else:
+        raise ValueError(f"Unknown DICE support space: {support_space}")
     threshold = min(max(float(support_threshold), 0.0), 1.0)
     temperature = max(float(support_temperature), 1e-6)
     gate = torch.sigmoid((support - threshold) * temperature)
@@ -1663,15 +1713,43 @@ def dice_support_consensus_update(
         gain = torch.exp((support - threshold) * float(support_strength))
         gain = gain.clamp(max=max(float(support_cap), 1.0))
         gate = gate * gain
-    final_update = mean_update * gate
-    norms = torch.linalg.vector_norm(stack.flatten(1), dim=1)
+    anti_threshold = min(max(float(anti_threshold), 0.0), 1.0)
+    if anti_updates:
+        anti_temp = max(float(anti_temperature), 1e-6)
+        anti_gate = torch.sigmoid((anti_threshold - anti_same) * anti_temp)
+        if anti_strength != 0:
+            anti_gate = anti_gate * torch.exp(-float(anti_strength) * anti_same)
+        gate = gate * anti_gate
+    else:
+        anti_gate = torch.ones_like(gate)
+    if support_space == "coordinate":
+        assert reconstruction_basis is None
+        final_update = mean_update * gate
+        mean_map_fro = torch.linalg.vector_norm(mean_update)
+    else:
+        assert reconstruction_basis is not None and mean_coeff is not None
+        final_flat = (mean_coeff * gate) @ reconstruction_basis
+        final_update = final_flat.reshape_as(updates[0]).contiguous()
+        mean_map = (mean_coeff @ reconstruction_basis).reshape_as(updates[0])
+        mean_map_fro = torch.linalg.vector_norm(mean_map)
+    norms = torch.linalg.vector_norm(flat, dim=1)
     stats = {
         "dice_context_count": float(len(updates)),
+        "dice_anti_context_count": float(len(anti_updates)),
+        "dice_support_space_is_svd": 1.0 if support_space == "svd" else 0.0,
+        "dice_subspace_rank": float(actual_rank),
+        "dice_subspace_energy_fraction": float(mode_energy_fraction),
         "dice_support_threshold": threshold,
         "dice_support_temperature": float(support_temperature),
         "dice_support_strength": float(support_strength),
         "dice_support_cap": float(support_cap),
         "dice_support_floor": floor,
+        "dice_anti_threshold": anti_threshold,
+        "dice_anti_temperature": float(anti_temperature),
+        "dice_anti_strength": float(anti_strength),
+        "dice_anti_same_mean": float(anti_same.mean().item()),
+        "dice_anti_same_p90": float(torch.quantile(anti_same.flatten(), 0.90).item()),
+        "dice_anti_gate_mean": float(anti_gate.mean().item()),
         "dice_mean_support": float(support.mean().item()),
         "dice_support_p90": float(torch.quantile(support.flatten(), 0.90).item()),
         "dice_support_p99": float(torch.quantile(support.flatten(), 0.99).item()),
@@ -1681,7 +1759,7 @@ def dice_support_consensus_update(
         "dice_high_support_fraction": float((support >= threshold).float().mean().item()),
         "dice_mean_update_fro": float(norms.mean().item()),
         "dice_mean_update_fro_std": float(norms.std(unbiased=False).item()),
-        "dice_mean_map_fro": float(torch.linalg.vector_norm(mean_update).item()),
+        "dice_mean_map_fro": float(mean_map_fro.item()),
         "dice_final_update_fro": float(torch.linalg.vector_norm(final_update).item()),
     }
     stats.update(proposal_alignment_stats([update.detach().float().cpu() for update in updates]))
@@ -2662,11 +2740,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ensemble-directional-min-agreement", type=float, default=0.0)
     parser.add_argument("--ensemble-subspace-rank", type=int, default=2)
     parser.add_argument("--dice-defer-apply", action="store_true")
+    parser.add_argument("--dice-support-space", choices=["coordinate", "svd"], default="coordinate")
+    parser.add_argument("--dice-subspace-rank", type=int, default=8)
     parser.add_argument("--dice-support-threshold", type=float, default=0.75)
     parser.add_argument("--dice-support-temperature", type=float, default=16.0)
     parser.add_argument("--dice-support-strength", type=float, default=1.0)
     parser.add_argument("--dice-support-cap", type=float, default=2.0)
     parser.add_argument("--dice-support-floor", type=float, default=0.0)
+    parser.add_argument("--dice-anti-threshold", type=float, default=0.50)
+    parser.add_argument("--dice-anti-temperature", type=float, default=12.0)
+    parser.add_argument("--dice-anti-strength", type=float, default=1.0)
     parser.add_argument("--lexical-channel", action="store_true")
     parser.add_argument("--lexical-channel-attention", action="store_true")
     parser.add_argument("--lexical-channel-scale", type=float, default=0.25)
@@ -3121,6 +3204,7 @@ def run_intrinsic_surprise_writes(
     updates_path: Path,
     *,
     slot_id: int | None,
+    dice_anti_lesson_texts: list[str] | None = None,
     extra_negative_keys_by_layer: dict[int, torch.Tensor] | None = None,
     selected_keys_out_by_layer: dict[int, list[torch.Tensor]] | None = None,
     max_extra_negative_rows: int = 0,
@@ -3176,7 +3260,13 @@ def run_intrinsic_surprise_writes(
             and args.cori_edge_top_k > 0
         )
     )
-    for lesson_idx, lesson_text in enumerate(lesson_texts):
+    write_contexts: list[tuple[bool, int, str]] = [(True, idx, text) for idx, text in enumerate(lesson_texts)]
+    if args.dice_defer_apply and dice_anti_lesson_texts:
+        write_contexts.extend((False, idx, text) for idx, text in enumerate(dice_anti_lesson_texts))
+    dice_deferred_anti_updates: dict[int, list[torch.Tensor]] = {}
+    for is_positive_dice_context, lesson_idx, lesson_text in write_contexts:
+        if not is_positive_dice_context and not args.dice_defer_apply:
+            continue
         if args.write_only_final and lesson_idx != len(lesson_texts) - 1:
             continue
         prompt = format_intrinsic_lesson_prompt(tokenizer, lesson_text, args)
@@ -4286,7 +4376,8 @@ def run_intrinsic_surprise_writes(
                     selection.diagnostics = {}
                 selection.diagnostics.update(spectra.diagnostics)
             if args.dice_defer_apply:
-                dice_deferred_updates.setdefault(layer_idx, []).append(update.detach().float().cpu())
+                target_store = dice_deferred_updates if is_positive_dice_context else dice_deferred_anti_updates
+                target_store.setdefault(layer_idx, []).append(update.detach().float().cpu())
                 append_jsonl(
                     updates_path,
                     {
@@ -4294,7 +4385,7 @@ def run_intrinsic_surprise_writes(
                         "layer": layer_idx,
                         "module": "mlp_down",
                         "write_mode": "intrinsic_surprise",
-                        "ensemble_phase": "dice_proposal",
+                        "ensemble_phase": "dice_proposal" if is_positive_dice_context else "dice_anti_proposal",
                         "lesson_token_count": int(keys.shape[0]),
                         "selected_rows": int(selection.keys.shape[0]),
                         "selected_token_min": int(selection.token_indices.min().item()),
@@ -4305,6 +4396,7 @@ def run_intrinsic_surprise_writes(
                         "intrinsic_target_mode": args.intrinsic_surprise_target_mode,
                         "intrinsic_relation_value_mode": args.intrinsic_surprise_relation_value_mode,
                         "dice_defer_apply": True,
+                        "dice_positive_context": bool(is_positive_dice_context),
                         "update_fro": float(torch.linalg.vector_norm(update).item()),
                         **(selection.diagnostics or {}),
                         **stats.__dict__,
@@ -4649,11 +4741,17 @@ def run_intrinsic_surprise_writes(
                 continue
             final_update, dice_stats = dice_support_consensus_update(
                 updates,
+                anti_updates=dice_deferred_anti_updates.get(layer_idx),
+                support_space=args.dice_support_space,
+                subspace_rank=args.dice_subspace_rank,
                 support_threshold=args.dice_support_threshold,
                 support_temperature=args.dice_support_temperature,
                 support_strength=args.dice_support_strength,
                 support_cap=args.dice_support_cap,
                 support_floor=args.dice_support_floor,
+                anti_threshold=args.dice_anti_threshold,
+                anti_temperature=args.dice_anti_temperature,
+                anti_strength=args.dice_anti_strength,
             )
             wrappers[layer_idx].add_memory_(final_update, slot_id=slot_id)
             append_jsonl(
