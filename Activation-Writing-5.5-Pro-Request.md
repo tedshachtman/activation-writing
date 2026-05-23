@@ -3117,3 +3117,24 @@ Lyran seed 3 also had `1/4 -> 4/4` baseline/context but raw relational fell to
 So the next DICE loop should use the raw-write screener, not just context
 upper-bound screening. A safe DICE `0/4` result is only informative when the
 same split has an unsafe raw-write acquisition payload to purify.
+
+I ran the first raw split screen over tasks `0..3`, seeds `1..3`. Only one row
+was raw-acquisition-positive:
+
+```text
+Lyran seed 1: baseline 1/4, context 4/4, edited 2/4,
+c2w 0, before-correct drop 2.812, max drop 9.808
+```
+
+Every other context-solvable row was raw-inert or worse, usually with sentinel
+damage. I then reran the two best DICE gates on the same Lyran seed/question
+setup:
+
+```text
+DICE raw 4+4 anti:        0/4 -> 1/4, c2w 0, drop 0.056, max drop 0.585
+DICE key-effect 4+4 anti: 0/4 -> 1/4, c2w 0, drop 0.057, max drop 0.598
+```
+
+Key-effect support is denser in effect space than raw-coordinate support, but
+both produce the same small safe shard. The bottleneck is still semantic payload
+recovery, not final update scale.

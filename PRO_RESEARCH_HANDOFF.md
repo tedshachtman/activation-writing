@@ -3211,3 +3211,39 @@ baseline/context 1/4 -> 4/4, edited 0/4, c2w 0, before-correct drop 2.871, max d
 So future DICE-coordinate comparisons should first find splits where the unsafe
 base write actually acquires. A safe DICE `0/4` result is only meaningful when
 the same split has a real raw-write payload to purify.
+
+I ran the first raw split screen over tasks `0..3`, seeds `1..3`:
+
+```text
+runs/raw_split_screen_tasks0-3_seeds1-3/summary.jsonl
+```
+
+Only one split was raw-acquisition-positive:
+
+```text
+Lyran seed 1: baseline 1/4, context 4/4, edited 2/4,
+c2w 0, before-correct drop 2.812, max drop 9.808
+```
+
+All other context-solvable rows were raw-inert or worse, usually while still
+damaging sentinels. Examples:
+
+```text
+Vomar seeds 1/2/3: edited 0/4 in all cases, c2w 2/1/1.
+Seldic seeds 1/2/3: no positive edited delta, c2w 2/1/0.
+Nareth seeds 1/2/3: no positive edited delta, c2w 1/2/0.
+```
+
+I then reran the two best DICE gates on the same Lyran seed/question setup:
+
+| Run | Baseline | Context | Edited | c2w | before-correct drop | max drop | Mean final Fro |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| DICE raw `4+4` anti | `0/4` | `4/4` | `1/4` | `0` | `0.056` | `0.585` | `0.797` |
+| DICE key-effect `4+4` anti | `0/4` | `4/4` | `1/4` | `0` | `0.057` | `0.598` | `0.782` |
+
+Key-effect support is much denser in its coordinate (`mean gate 0.092`,
+high-support fraction `0.441`) than raw-coordinate support (`mean gate 0.0013`,
+high-support fraction `0.0057`), but both reconstruct the same small safe shard.
+This confirms the current DICE bottleneck: anti-support removes posture damage,
+but current support coordinates still do not preserve enough threshold-bearing
+semantic payload.

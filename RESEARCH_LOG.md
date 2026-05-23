@@ -8109,3 +8109,47 @@ Next practical step: use `screen_raw_minilang_splits.py` to find splits where
 the unsafe base write actually acquires before spending time on DICE variants.
 For DICE research, a safe `0/4` variant is only informative when the same split
 has an unsafe raw-write payload to remove.
+
+I ran the first 12-row raw split screen:
+
+```text
+runs/raw_split_screen_tasks0-3_seeds1-3/summary.jsonl
+```
+
+Summary:
+
+| Task | Language | Seed | Baseline | Context | Edited | Delta | c2w | before-correct drop | max drop |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | Lyran | 1 | `1/4` | `4/4` | `2/4` | `+1/4` | `0` | `2.812` | `9.808` |
+| 0 | Lyran | 2 | `0/4` | `4/4` | `0/4` | `0` | `0` | `3.182` | `9.576` |
+| 0 | Lyran | 3 | `1/4` | `4/4` | `0/4` | `-1/4` | `0` | `2.871` | `6.567` |
+| 1 | Vomar | 1 | `1/4` | `4/4` | `0/4` | `-1/4` | `2` | `4.588` | `16.393` |
+| 1 | Vomar | 2 | `0/4` | `4/4` | `0/4` | `0` | `1` | `3.151` | `13.366` |
+| 1 | Vomar | 3 | `0/4` | `4/4` | `0/4` | `0` | `1` | `4.662` | `18.628` |
+| 2 | Seldic | 1 | `1/4` | `4/4` | `1/4` | `0` | `2` | `5.359` | `21.923` |
+| 2 | Seldic | 2 | `1/3` | `3/3` | `1/3` | `0` | `1` | `4.584` | `19.027` |
+| 2 | Seldic | 3 | `0/4` | `4/4` | `0/4` | `0` | `0` | `4.561` | `20.102` |
+| 3 | Nareth | 1 | `0/4` | `4/4` | `0/4` | `0` | `1` | `3.076` | `7.334` |
+| 3 | Nareth | 2 | `2/4` | `4/4` | `1/4` | `-1/4` | `2` | `5.572` | `16.335` |
+| 3 | Nareth | 3 | `2/4` | `4/4` | `2/4` | `0` | `0` | `3.471` | `9.765` |
+
+Only one split in this grid is raw-acquisition-positive: Lyran seed 1. Every
+other context-solvable split is raw-inert or worse, usually while still
+damaging sentinel margins. This strongly confirms that the next DICE tests
+need raw-acquiring splits, not just context-solvable splits.
+
+I then reran the two best DICE gates on the same task/question seed:
+
+| Run | Baseline | Context | Edited | c2w | before-correct drop | max drop | Mean final Fro |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| DICE raw `4+4` anti, seed 1/candidates 20 | `0/4` | `4/4` | `1/4` | `0` | `0.056` | `0.585` | `0.797` |
+| DICE key-effect `4+4` anti, seed 1/candidates 20 | `0/4` | `4/4` | `1/4` | `0` | `0.057` | `0.598` | `0.782` |
+
+The behavioral outcome is identical to the earlier local DICE result. Key-effect
+support is much denser in its own coordinate (`mean gate 0.092`, high-support
+fraction `0.441`) than raw-coordinate support (`mean gate 0.0013`,
+high-support fraction `0.0057`), but both reconstruct a similarly small,
+safe, one-item shard. The next bottleneck is still not final update norm or
+support threshold. It is the missing coordinate that preserves more of the
+threshold-bearing semantic payload while keeping same-format anti-support's
+posture cancellation.
