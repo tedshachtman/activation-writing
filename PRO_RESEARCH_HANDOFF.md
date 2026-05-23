@@ -3036,6 +3036,10 @@ current write only; no sidecar state is available between future tasks.
 | DICE raw, `4` diverse contexts | `0/4` | `4/4` | `1/4` | `1` | `1.068` |
 | DICE raw, `8` diverse contexts | `1/4` | `4/4` | `1/4` | `1` | `0.460` |
 | DICE raw, `4` diverse + `4` rival-language anti contexts | `0/4` | `4/4` | `1/4` | `0` | `0.056` |
+| DICE raw, `4+4` anti, SVD support space | `0/4` | `4/4` | `0/4` | `0` | `0.013` |
+| DICE raw, `4+4` anti, scale `.25` | `0/4` | `4/4` | `1/4` | `0` | `0.130` |
+| DICE raw, `4+4` anti, loose support | `0/4` | `4/4` | `1/4` | `0` | `0.077` |
+| DICE raw, `8+8` anti | `1/4` | `4/4` | `1/4` | `0` | `0.045` |
 
 This is now the most promising local result:
 
@@ -3047,11 +3051,35 @@ This is now the most promising local result:
 - same-format rival-language anti-support appears to remove the generic
   translation/task posture better than same-language support alone.
 
+Follow-up local findings:
+
+- SVD support-space DICE is too conservative: safe but inert.
+- Raising target scale to `.15` or `.25` keeps safety but does not improve
+  acquisition beyond `1/4`.
+- Loosening support threshold keeps safety but does not improve acquisition.
+- `8+8` anti-support is also safe but more conservative than `4+4`.
+
+Two-task teacher-filtered local gate:
+
+| Run | Task0 immediate | Task0 after task1 | Task1 after task1 | c2w after task1 | drop after task1 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| raw relational | `2/4` from `1/4` baseline | `1/4` | `0/4` from `1/4` baseline | `1` | `4.585` |
+| DICE raw `4+4` anti | `1/4` from `0/4` baseline | `1/4` | `0/4` from `0/4` baseline | `0` | `0.049` |
+
+So DICE anti-support is very safe and retains task0, but still fails to acquire
+task1 on this small local sequential gate. It is not the full solution yet.
+The next refinement needs to recover more threshold-bearing mass while keeping
+anti-support's posture cancellation. Raw coordinate support is too sparse; SVD
+support is too blunt/conservative.
+
 I added a full reduced-benchmark preset:
 
 ```text
 dice_relational_raw_anti_fast
 ```
+
+The preset currently uses the locally best `4+4` anti-support configuration,
+not `8+8`.
 
 New ask:
 
@@ -3074,3 +3102,8 @@ Specifically, propose the next implementable refinement around:
 3. applying the method to unsafe acquisition-bearing maps such as direct
    relational context-value and ORCA residual-only;
 4. avoiding raw-coordinate consensus deleting the threshold component.
+
+Promising coordinates to consider: key-conditioned row/maplet support,
+target-token grouped support, ORCA-residual components with anti-support, or a
+closed-form quotient that subtracts rival-language common posture from the
+direct relational map without collapsing to a tiny coordinate gate.

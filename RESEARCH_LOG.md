@@ -7865,6 +7865,11 @@ Local one-task teacher-filtered gate:
 | DICE raw, `4` diverse contexts | `0/4` | `4/4` | `1/4` | `1` | `1.068` |
 | DICE raw, `8` diverse contexts | `1/4` | `4/4` | `1/4` | `1` | `0.460` |
 | DICE raw, `4` diverse + `4` rival-language anti contexts | `0/4` | `4/4` | `1/4` | `0` | `0.056` |
+| DICE raw, `4+4` anti, SVD support space | `0/4` | `4/4` | `0/4` | `0` | `0.013` |
+| DICE raw, `4+4` anti, scale `.15` | `0/4` | `4/4` | `1/4` | `0` | `0.081` |
+| DICE raw, `4+4` anti, scale `.25` | `0/4` | `4/4` | `1/4` | `0` | `0.130` |
+| DICE raw, `4+4` anti, loose support | `0/4` | `4/4` | `1/4` | `0` | `0.077` |
+| DICE raw, `8+8` anti | `1/4` | `4/4` | `1/4` | `0` | `0.045` |
 
 The DICE anti-support result is the first positive result in this branch:
 
@@ -7882,6 +7887,38 @@ Diagnostics from the DICE anti run:
 - anti-support reduces the gate and update norm enough to remove sentinel
   damage while keeping one item of acquisition.
 
+Additional local conclusions:
+
+- SVD support-space DICE is too conservative here. It was very safe but inert
+  (`0/4` edited, final update Frobenius around `0.067`).
+- Raising target scale to `.15` or `.25` preserved zero c2w and low margin
+  drift but did not buy another item. The current bottleneck is not just final
+  update magnitude.
+- Lowering the support threshold also did not buy another item. The gate is
+  still very sparse.
+- Increasing to `8+8` contexts was safe but more conservative than `4+4`: it
+  stayed at baseline and reduced final update Frobenius (`0.49` vs `0.80`).
+  More contexts are not automatically better under raw-coordinate support.
+
+Two-task teacher-filtered local gate:
+
+| Run | Task0 immediate | Task0 after task1 | Task1 after task1 | c2w after task1 | drop after task1 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| raw relational | `2/4` from `1/4` baseline | `1/4` | `0/4` from `1/4` baseline | `1` | `4.585` |
+| DICE raw `4+4` anti | `1/4` from `0/4` baseline | `1/4` | `0/4` from `0/4` baseline | `0` | `0.049` |
+
+Interpretation:
+
+- DICE anti-support gives safe task0 acquisition and retention, but task1 does
+  not acquire on this local two-task gate. It is much safer than raw, but may
+  be suppressing later writes or simply failing to find enough invariant mass
+  for Vomar.
+- The next refinement should preserve DICE anti-support's posture cancellation
+  while recovering more threshold mass. Raw coordinate support is too sparse;
+  SVD support is too conservative. The missing object is likely a structured
+  support coordinate: row/key-conditioned maplets, target-token grouped
+  components, or ORCA-residual map components with same-format anti-support.
+
 Interpretation:
 
 This supports the user's "codenames contexts" hypothesis more than the TAG-CE
@@ -7890,7 +7927,8 @@ Adding same-format rival-language anti-support is the important move: it
 directly attacks translation/task posture while preserving a small
 language-specific invariant write.
 
-I added a full reduced-benchmark preset:
+I added a full reduced-benchmark preset, now set to the empirically safer
+`4+4` anti-support local configuration:
 
 ```text
 dice_relational_raw_anti_fast

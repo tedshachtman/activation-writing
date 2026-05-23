@@ -195,6 +195,10 @@ relational write:
 | DICE raw, `4` diverse contexts | `0/4` | `4/4` | `1/4` | `1` | `1.068` |
 | DICE raw, `8` diverse contexts | `1/4` | `4/4` | `1/4` | `1` | `0.460` |
 | DICE raw, `4` diverse + `4` rival-language anti contexts | `0/4` | `4/4` | `1/4` | `0` | `0.056` |
+| DICE raw, `4+4` anti, SVD support space | `0/4` | `4/4` | `0/4` | `0` | `0.013` |
+| DICE raw, `4+4` anti, scale `.25` | `0/4` | `4/4` | `1/4` | `0` | `0.130` |
+| DICE raw, `4+4` anti, loose support | `0/4` | `4/4` | `1/4` | `0` | `0.077` |
+| DICE raw, `8+8` anti | `1/4` | `4/4` | `1/4` | `0` | `0.045` |
 
 The DICE anti-support result is now the most promising local result:
 
@@ -204,16 +208,37 @@ The DICE anti-support result is now the most promising local result:
 - no sidecar state after the write; contexts are only used during current write
   construction.
 
+Follow-up findings:
+
+- SVD support-space DICE is safe but inert.
+- Raising target scale to `.15`/`.25` and loosening the support threshold keep
+  safety but do not improve beyond `1/4`.
+- `8+8` anti-support is safe but more conservative than `4+4`.
+- In a local two-task teacher-filtered gate, DICE raw `4+4` anti gets task0
+  `1/4` from `0/4` baseline and retains it after task1 with `0` c2w and `0.049`
+  drop, but task1 stays `0/4`. Raw relational gets task0 `2/4` from `1/4`
+  baseline, then falls to `1/4` after task1 and produces `1` c2w with `4.585`
+  drop.
+
 I added a benchmark preset:
 
 ```text
 dice_relational_raw_anti_fast
 ```
 
+This preset now uses the locally best `4+4` anti-support configuration.
+
 New live question: focus on the multi-context invariant-write direction unless
 you see a strong reason not to. How do we make DICE anti-support into a stronger
 closed-form semantic-invariance method that applies to unsafe acquisition-bearing
 maps without raw-coordinate consensus deleting the threshold component?
+
+Raw coordinate support is too sparse. SVD support is too conservative. The next
+proposal should probably use a more structured support coordinate: key-conditioned
+row/maplet support, target-token grouped support, ORCA-residual components with
+anti-support, or a closed-form quotient that subtracts rival-language common
+posture from the direct relational map without collapsing to a tiny coordinate
+gate.
 
 ### Hard Constraints
 
