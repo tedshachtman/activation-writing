@@ -37,6 +37,7 @@ from caic.intrinsic_surprise import (
     seal_qrico_purify_update,
     tdmi_q_transport_scores,
     trace_q_purify_update,
+    wm_coherence_scores,
     select_intrinsic_compatibility_residual_write,
     select_intrinsic_conditional_relation_innovation_write,
     select_intrinsic_conjunctive_feature_birth_update,
@@ -2526,6 +2527,7 @@ def parse_args() -> argparse.Namespace:
             "qrico",
             "prism_q",
             "tdmi_q",
+            "wm_coherence",
             "trace_q",
             "spectra",
             "seal_qrico",
@@ -2602,6 +2604,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tdmi-trust-threshold", type=float, default=0.0)
     parser.add_argument("--tdmi-trust-floor", type=float, default=0.15)
     parser.add_argument("--tdmi-disable-future", action="store_true")
+    parser.add_argument("--wm-graph-top-k", type=int, default=8)
+    parser.add_argument("--wm-trust-temperature", type=float, default=0.35)
+    parser.add_argument("--wm-trust-threshold", type=float, default=0.0)
+    parser.add_argument("--wm-trust-floor", type=float, default=0.25)
+    parser.add_argument("--wm-future-weight", type=float, default=0.25)
+    parser.add_argument("--wm-ambient-rank", type=int, default=16)
+    parser.add_argument("--wm-ambient-weight", type=float, default=0.15)
+    parser.add_argument("--wm-disable-future", action="store_true")
     parser.add_argument("--prism-horizon", type=int, default=4)
     parser.add_argument("--prism-signal-rank", type=int, default=16)
     parser.add_argument("--prism-hazard-rank", type=int, default=16)
@@ -3909,6 +3919,65 @@ def run_intrinsic_surprise_writes(
                 if selection.diagnostics is None:
                     selection.diagnostics = {}
                 selection.diagnostics.update(qrico.diagnostics)
+            elif args.intrinsic_target_purifier == "wm_coherence":
+                future_outputs_by_layer = {
+                    future_idx: future_capture.outputs[: usable_keys.shape[0]]
+                    for future_idx, future_capture in captures.items()
+                    if future_capture.outputs.shape[0] >= usable_keys.shape[0]
+                }
+                wm = wm_coherence_scores(
+                    update,
+                    keys=selection.keys,
+                    targets=targets,
+                    weights=positive_weights,
+                    all_keys=usable_keys,
+                    all_outputs=captures[layer_idx].outputs[: usable_keys.shape[0]],
+                    token_indices=selection.token_indices,
+                    layer=layer,
+                    future_outputs_by_layer=future_outputs_by_layer,
+                    graph_top_k=args.wm_graph_top_k,
+                    trust_temperature=args.wm_trust_temperature,
+                    trust_threshold=args.wm_trust_threshold,
+                    trust_floor=args.wm_trust_floor,
+                    future_weight=0.0 if args.wm_disable_future else args.wm_future_weight,
+                    ambient_rank=args.wm_ambient_rank,
+                    ambient_weight=args.wm_ambient_weight,
+                    low_surprise_quantile=args.karp_low_surprise_quantile,
+                )
+                wm_weights = positive_weights.detach().float().cpu() * wm.row_trust
+                if use_metric_solve:
+                    update, stats = protected_metric_update(
+                        selection.keys,
+                        targets,
+                        negative_keys=negative_keys,
+                        output_penalty_basis=output_penalty_basis,
+                        positive_weights=wm_weights,
+                        ridge=args.ridge,
+                        negative_weight=args.intrinsic_surprise_input_penalty_weight,
+                        output_penalty_weight=args.intrinsic_surprise_output_penalty_weight,
+                        eta=args.eta,
+                        max_update_norm=args.max_update_norm,
+                    )
+                else:
+                    update, stats = protected_ridge_update(
+                        selection.keys,
+                        targets,
+                        negative_keys=negative_keys,
+                        positive_weights=wm_weights,
+                        ridge=args.ridge,
+                        negative_weight=args.intrinsic_surprise_input_penalty_weight,
+                        eta=args.eta,
+                        max_update_norm=args.max_update_norm,
+                    )
+                fit = selection.keys.detach().float() @ update.T
+                stats.fit_rmse = float(torch.sqrt(torch.mean((fit - targets.detach().float()).square())).item())
+                stats.update_fro = float(torch.linalg.vector_norm(update).item())
+                if negative_keys is not None and negative_keys.numel() > 0:
+                    neg_fit = negative_keys.detach().float() @ update.T
+                    stats.negative_rmse = float(torch.sqrt(torch.mean(neg_fit.square())).item())
+                if selection.diagnostics is None:
+                    selection.diagnostics = {}
+                selection.diagnostics.update(wm.diagnostics)
             elif args.intrinsic_target_purifier == "tdmi_q":
                 preliminary_qrico = qrico_purify_update(
                     update,
@@ -4506,6 +4575,14 @@ def run_intrinsic_surprise_writes(
                     "prism_no_residualize_hazard": bool(args.prism_no_residualize_hazard),
                     "prism_disable_future": bool(args.prism_disable_future),
                     "prism_ablation": args.prism_ablation,
+                    "wm_graph_top_k": args.wm_graph_top_k,
+                    "wm_trust_temperature": args.wm_trust_temperature,
+                    "wm_trust_threshold": args.wm_trust_threshold,
+                    "wm_trust_floor": args.wm_trust_floor,
+                    "wm_future_weight": args.wm_future_weight,
+                    "wm_ambient_rank": args.wm_ambient_rank,
+                    "wm_ambient_weight": args.wm_ambient_weight,
+                    "wm_disable_future": bool(args.wm_disable_future),
                     "trace_object_endpoints": args.trace_object_endpoints,
                     "trace_ambient_endpoints": args.trace_ambient_endpoints,
                     "trace_option_top_k": args.trace_option_top_k,

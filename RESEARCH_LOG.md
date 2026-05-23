@@ -7458,3 +7458,155 @@ The next DICE implementation should therefore either:
 
 Until that exists, raw DICE should be treated as a useful falsifier and safety
 diagnostic, not a frontier method.
+
+## 2026-05-23: Working-Memory Coherence Theory
+
+The current theory update is that the object of learning is not a feature, not
+even an isolated relation, but a conditional deformation of the whole currently
+instantiated working-memory/world-state.
+
+Working memory, in this framing, is the model temporarily configuring its world
+model as if many constraints were true at once. A stronger working memory can
+hold a larger and more persistent constraint set: entities, relations, goals,
+rules, roles, causal assumptions, answer requirements, and local context can all
+be simultaneously active. This lets the world model generate from a novel
+conditional state rather than from its default prior. Learning becomes useful
+when the configured state exposes a coherence failure: under the old weights,
+the whole state does not settle cleanly.
+
+So the surprising object is not "dog" or "dog in room" in isolation. The update
+should be closer to:
+
+\[
+\text{this room/world-state with this dog-shaped unexpected object in this
+specific relational position is less impossible than before.}
+\]
+
+Likewise, a purple giraffe is not surprising because purple fires or giraffe
+fires. It is surprising because ordinary-street context, animal identity,
+visual realism, causal expectations, and the purple-giraffe conjunction do not
+jointly cohere under the current world model. The learning target should be the
+minimal weight update that makes that whole configured state more coherent,
+without globally making "purple," "giraffe," "answer mode," or "weird scene"
+more likely everywhere.
+
+This gives a cleaner explanation of the experimental pattern.
+
+- Raw activation-delta methods wrote visible state displacement rather than the
+  cause of the coherence failure. They saw the context state bend in one
+  direction and installed that bend broadly. This explains why they sometimes
+  acquired but wrote answer posture, translation posture, or broad correction
+  fields.
+- Associative binding was more targeted, but still too local. It wrote
+  feature-to-value or token-to-token associations without enough of the
+  surrounding state fabric, so it learned simple bindings while smearing
+  translation/world-mode deformation into sentinels.
+- Predictive residual surprise was the opposite failure. It measured local
+  unexpectedness along a small feature trajectory. That is safe, but global
+  coherence failure may not appear as a single locally surprising feature. It
+  detected small knots, not the whole state refusing to settle.
+- Relational surprise got closer because it asked whether co-instantiated
+  bindings were surprising, e.g. "purple-giraffe" rather than "purple" or
+  "giraffe." But pairwise relation tension is still not the whole state energy.
+  Relational aggregate/context-value writes acquired because they wrote more of
+  the surrounding state, but became unsafe because they also wrote posture and
+  task-mode deformation.
+- CORI was a clean seismograph for relation-field surprise: it asked whether
+  relation structure was surprising after conditioning on feature marginals and
+  weight priors. It was safe because it was purified, but inert because it did
+  not write the behaviorally useful deformation that makes the whole
+  working-memory state usable.
+- STAR tried to write future same-pass trajectory, but raw future residual
+  motion is not necessarily the energy-lowering update. It contains settling
+  artifacts, compression, answer posture, and the model's current way of
+  resolving the tension. Active STAR being anti-aligned fits this interpretation.
+- KARP, SHARP, ORCA, Q-RICO, OCEP, TRACE-local, and related purifiers all
+  struggled because useful coherence updates must eventually touch readout.
+  "Output-sensitive" is not the same as "bad." The dangerous component is not a
+  local property of a vector; it is how that vector changes the settled global
+  state after downstream propagation.
+- SHARP became safe but inert because same-pass stable-margin preservation was
+  too correlated with the threshold-crossing movement needed for acquisition.
+- ORCA showed that neat low-rank option/readout atom bases were looking at a
+  projected shadow: kept and removed projected atoms were mostly inert, while
+  acquisition lived in the high-rank residual.
+- Q-RICO remains a useful safe scaffold because it preserves more high-rank
+  residual movement while filtering obvious junk, but scaling it still damages
+  sentinels because it lacks a criterion for "conditional on this world-state"
+  versus "global task/posture bias."
+- DICE fits the same story. If all support contexts share translation format,
+  the invariant includes translation-world posture. Deliberately diverse
+  contexts are closer to the right idea because they try to make nuisance fabric
+  cancel, but raw weight-coordinate agreement deletes the threshold component.
+  The common object is probably not linearly aligned in raw matrix entries.
+
+The deeper target should therefore be:
+
+\[
+\boxed{
+\text{find the minimal weight update that makes the entire instantiated
+context-state more self-consistent under the model, while not globally lowering
+the energy of generic answer/posture states.}
+}
+\]
+
+In this lens, the project has been oscillating between two failure modes:
+
+1. safe-but-inert methods detect purified local surprise without the full
+   coherence deformation;
+2. acquiring-but-unsafe methods write a real chunk of the coherence deformation
+   but include too much generic posture or task-mode state.
+
+The next primitive should estimate a global coherence residual: the part of the
+context-induced state required for the whole working-memory configuration to
+settle, supported by many internal constraints of the context, and not explained
+by generic task posture. In short, the thing to learn is not the dog, nor
+dog-room. It is the room's world-state with dog accepted into it.
+
+### First Implementation Probe: WM-Coherence Row Reweighting
+
+I added a first cheap implementation named `wm_coherence`. It is intentionally
+not the full theory. It wraps the known learning-capable relational/context
+write and reweights selected rows by whether the proposed row effects make the
+selected same-pass object/use state graph more like the context-value target
+graph.
+
+Per layer:
+
+- current nodes are same-pass residual outputs at selected relational rows;
+- target nodes are residual outputs plus context-value targets, with optional
+  downstream same-token residual drift;
+- candidate nodes are residual outputs plus the proposed update effects;
+- the score is the reduction in incident pairwise cosine-graph error, with a
+  penalty for effects lying in low-surprise/default residual states.
+
+This is a row-level proxy for "does this update help the whole working-memory
+configuration settle?" It does not yet estimate a true global energy gradient
+or exact downstream propagation.
+
+Fast reduced two-task results:
+
+| Preset | Task0 after task0 | c2w after task0 | Task0 after task1 | Task1 after task1 | c2w after task1 | before-correct drop after task1 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `wm_coherence_fast` | `2/4` | `0` | `2/4` | `0/4` | `4` | `4.587` |
+| `wm_coherence_strict_fast` | `2/4` | `0` | `2/4` | `0/4` | `4` | `4.657` |
+
+Diagnostics averaged over updates:
+
+| Preset | trust mean | improvement mean | ambient mean | update Fro |
+| --- | ---: | ---: | ---: | ---: |
+| `wm_coherence_fast` | `0.657` | `-0.070` | `0.031` | `4.704` |
+| `wm_coherence_strict_fast` | `0.531` | `-0.077` | `0.029` | `4.662` |
+
+Interpretation:
+
+- The row-level graph score preserves the same kind of task0 acquisition as the
+  unsafe relational write and avoids c2w after the first task.
+- It does not solve the sequential problem: task1 does not acquire, and the
+  second write produces severe sentinel c2w.
+- Tightening the scalar row trust did not help, suggesting the first proxy is
+  still just a reweighted unsafe actuator, not a real global coherence
+  residual.
+- The theory remains useful, but the implementation needs a stronger object:
+  likely a map-level or trajectory-level coherence quotient, not row-level
+  pairwise graph reweighting.

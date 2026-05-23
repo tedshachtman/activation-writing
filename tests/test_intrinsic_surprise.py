@@ -20,6 +20,7 @@ from caic.intrinsic_surprise import (
     qrico_purify_update,
     tdmi_q_transport_scores,
     trace_q_purify_update,
+    wm_coherence_scores,
     select_intrinsic_associative_binding_write,
     select_intrinsic_compatibility_residual_write,
     select_intrinsic_conditional_relation_innovation_write,
@@ -1608,3 +1609,66 @@ def test_ocep_purifier_smoke_builds_current_weight_bases():
     assert result.generic_basis.shape[1] == update.shape[1]
     assert result.option_basis.shape[1] == update.shape[0]
     assert result.diagnostics["ocep_enabled"] == 1.0
+
+
+def test_wm_coherence_scores_prefer_graph_settling_update():
+    current = torch.tensor(
+        [
+            [1.0, 0.0, 0.0],
+            [0.8, 0.2, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.8, 0.2],
+        ]
+    )
+    targets = torch.tensor(
+        [
+            [0.0, 0.4, 0.0],
+            [0.0, 0.3, 0.0],
+            [0.4, 0.0, 0.0],
+            [0.3, 0.0, 0.0],
+        ]
+    )
+    keys = torch.eye(4)
+    weights = torch.ones(4)
+    token_indices = torch.arange(4)
+    good_update = targets.T.contiguous()
+    bad_effect = torch.tensor(
+        [
+            [0.0, 0.0, 0.4],
+            [0.0, 0.0, 0.4],
+            [0.0, 0.0, 0.4],
+            [0.0, 0.0, 0.4],
+        ]
+    )
+    bad_update = bad_effect.T.contiguous()
+
+    good = wm_coherence_scores(
+        good_update,
+        keys=keys,
+        targets=targets,
+        weights=weights,
+        all_keys=keys,
+        all_outputs=current,
+        token_indices=token_indices,
+        graph_top_k=2,
+        trust_floor=0.0,
+        ambient_weight=0.0,
+        future_weight=0.0,
+    )
+    bad = wm_coherence_scores(
+        bad_update,
+        keys=keys,
+        targets=targets,
+        weights=weights,
+        all_keys=keys,
+        all_outputs=current,
+        token_indices=token_indices,
+        graph_top_k=2,
+        trust_floor=0.0,
+        ambient_weight=0.0,
+        future_weight=0.0,
+    )
+
+    assert good.diagnostics["wm_coherence_graph_error_after"] < good.diagnostics["wm_coherence_graph_error_before"]
+    assert good.row_trust.mean() > bad.row_trust.mean()
+    assert good.row_improvement.mean() > bad.row_improvement.mean()

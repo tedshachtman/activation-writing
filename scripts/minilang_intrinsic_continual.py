@@ -194,6 +194,7 @@ def parse_args() -> argparse.Namespace:
             "qrico",
             "prism_q",
             "tdmi_q",
+            "wm_coherence",
             "trace_q",
             "spectra",
             "seal_qrico",
@@ -270,6 +271,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tdmi-trust-threshold", type=float, default=0.0)
     parser.add_argument("--tdmi-trust-floor", type=float, default=0.15)
     parser.add_argument("--tdmi-disable-future", action="store_true")
+    parser.add_argument("--wm-graph-top-k", type=int, default=8)
+    parser.add_argument("--wm-trust-temperature", type=float, default=0.35)
+    parser.add_argument("--wm-trust-threshold", type=float, default=0.0)
+    parser.add_argument("--wm-trust-floor", type=float, default=0.25)
+    parser.add_argument("--wm-future-weight", type=float, default=0.25)
+    parser.add_argument("--wm-ambient-rank", type=int, default=16)
+    parser.add_argument("--wm-ambient-weight", type=float, default=0.15)
+    parser.add_argument("--wm-disable-future", action="store_true")
     parser.add_argument("--prism-horizon", type=int, default=4)
     parser.add_argument("--prism-signal-rank", type=int, default=16)
     parser.add_argument("--prism-hazard-rank", type=int, default=16)

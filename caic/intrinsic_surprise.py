@@ -180,6 +180,22 @@ class TdmiQResult:
 
 
 @dataclass
+class WmCoherenceResult:
+    """Working-memory graph-coherence row scores.
+
+    ``row_trust`` is one multiplicative weight per selected relational row.
+    The score estimates whether the proposed row effects make the selected
+    same-pass object/use state graph more like the context-value target graph,
+    while discounting effects that mostly live in low-surprise/default states.
+    """
+
+    row_trust: torch.Tensor
+    row_improvement: torch.Tensor
+    row_ambient: torch.Tensor
+    diagnostics: dict[str, float]
+
+
+@dataclass
 class OcepPurificationResult:
     """OCEP-purified update plus diagnostics.
 
@@ -4064,6 +4080,175 @@ def tdmi_q_transport_scores(
         row_ambient=row_ambient.contiguous(),
         object_basis=object_basis.contiguous(),
         ambient_basis=ambient_basis.contiguous(),
+        diagnostics=diagnostics,
+    )
+
+
+def wm_coherence_scores(
+    update: torch.Tensor,
+    *,
+    keys: torch.Tensor,
+    targets: torch.Tensor,
+    weights: torch.Tensor,
+    all_keys: torch.Tensor,
+    all_outputs: torch.Tensor,
+    token_indices: torch.Tensor,
+    layer: nn.Module | None = None,
+    future_outputs_by_layer: dict[int, torch.Tensor] | None = None,
+    graph_top_k: int = 8,
+    trust_temperature: float = 0.35,
+    trust_threshold: float = 0.0,
+    trust_floor: float = 0.25,
+    future_weight: float = 0.25,
+    ambient_rank: int = 16,
+    ambient_weight: float = 0.15,
+    low_surprise_quantile: float = 0.35,
+    eps: float = 1e-6,
+) -> WmCoherenceResult:
+    """Score rows by global same-pass working-memory coherence.
+
+    The selected relational rows are treated as a small state graph. Current
+    nodes are same-pass residual outputs; target nodes are outputs plus the
+    context-value targets; candidate nodes are outputs plus the proposed update
+    effects. A row is trusted when its incident pairwise similarity errors move
+    toward the target graph, with a penalty for effects that mostly lie in
+    low-surprise/default residual states.
+    """
+
+    update_f = torch.nan_to_num(update.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    k = torch.nan_to_num(keys.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    y = torch.nan_to_num(targets.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    w = torch.nan_to_num(weights.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+    all_k = torch.nan_to_num(all_keys.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    all_y = torch.nan_to_num(all_outputs.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    tok = token_indices.detach().cpu().long()
+
+    if update_f.ndim != 2:
+        raise ValueError(f"update must be [d,m], got {tuple(update_f.shape)}")
+    d_model, d_ff = update_f.shape
+    if k.ndim != 2 or k.shape[1] != d_ff or y.ndim != 2 or y.shape[1] != d_model or k.shape[0] != y.shape[0]:
+        raise ValueError("WM coherence keys/targets do not match update shape")
+    if w.ndim != 1 or w.shape[0] != k.shape[0]:
+        raise ValueError(f"WM coherence weights must be [{k.shape[0]}], got {tuple(w.shape)}")
+    if all_k.ndim != 2 or all_k.shape[1] != d_ff or all_y.ndim != 2 or all_y.shape[1] != d_model:
+        raise ValueError("WM coherence all_keys/all_outputs do not match update shape")
+    if tok.numel() != k.shape[0]:
+        raise ValueError("WM coherence token_indices must align with selected rows")
+
+    diagnostics: dict[str, float] = {
+        "wm_coherence_enabled": 1.0,
+        "wm_coherence_update_fro_before": float(torch.linalg.vector_norm(update_f).item()),
+    }
+    n_rows = k.shape[0]
+    if n_rows < 2 or float(torch.linalg.vector_norm(update_f).item()) <= float(eps):
+        trust = torch.ones(n_rows, dtype=torch.float32)
+        diagnostics["wm_coherence_fallback"] = 1.0
+        return WmCoherenceResult(
+            row_trust=trust,
+            row_improvement=torch.zeros_like(trust),
+            row_ambient=torch.zeros_like(trust),
+            diagnostics=diagnostics,
+        )
+
+    clamped_tok = tok.clamp(min=0, max=max(all_y.shape[0] - 1, 0))
+    current = all_y[clamped_tok].contiguous()
+    effects = torch.nan_to_num(k @ update_f.T, nan=0.0, posinf=0.0, neginf=0.0)
+
+    future_parts: list[torch.Tensor] = []
+    if future_outputs_by_layer and float(future_weight) != 0.0:
+        for future in future_outputs_by_layer.values():
+            future_f = torch.nan_to_num(future.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+            if future_f.ndim == 2 and future_f.shape[1] == d_model and future_f.shape[0] > 0:
+                future_parts.append(future_f[clamped_tok.clamp(max=future_f.shape[0] - 1)])
+    if future_parts:
+        future_mean = torch.stack(future_parts, dim=0).mean(dim=0)
+        target_state = current + y + float(future_weight) * (future_mean - current)
+        used_future_weight = float(future_weight)
+    else:
+        target_state = current + y
+        used_future_weight = 0.0
+    candidate_state = current + effects
+
+    current_n = F.normalize(current, dim=1, eps=float(eps))
+    target_n = F.normalize(target_state, dim=1, eps=float(eps))
+    candidate_n = F.normalize(candidate_state, dim=1, eps=float(eps))
+    sim_current = current_n @ current_n.T
+    sim_target = target_n @ target_n.T
+    sim_candidate = candidate_n @ candidate_n.T
+
+    pair_count = max(1, min(int(graph_top_k), n_rows - 1))
+    eye_mask = torch.eye(n_rows, dtype=torch.bool)
+    sim_for_edges = sim_target.abs().masked_fill(eye_mask, -1.0)
+    edge_idx = torch.topk(sim_for_edges, k=pair_count, dim=1, largest=True).indices
+    edge_mask = torch.zeros(n_rows, n_rows, dtype=torch.float32)
+    edge_mask.scatter_(1, edge_idx, 1.0)
+    edge_mask = torch.maximum(edge_mask, edge_mask.T)
+    edge_mask.masked_fill_(eye_mask, 0.0)
+    pair_weight = (w / w.mean().clamp_min(float(eps))).sqrt()
+    edge_weight = edge_mask * pair_weight.unsqueeze(0) * pair_weight.unsqueeze(1)
+    denom = edge_weight.sum(dim=1).clamp_min(float(eps))
+
+    before_pair_error = (sim_current - sim_target).square() * edge_weight
+    after_pair_error = (sim_candidate - sim_target).square() * edge_weight
+    row_before = before_pair_error.sum(dim=1) / denom
+    row_after = after_pair_error.sum(dim=1) / denom
+    row_improvement = (row_before - row_after) / row_before.clamp_min(float(eps))
+
+    row_scores = _token_row_surprise(all_k, layer)
+    low_q = min(max(float(low_surprise_quantile), 0.0), 1.0)
+    threshold = torch.quantile(row_scores, low_q)
+    low_mask = row_scores <= threshold
+    if int(low_mask.sum().item()) < 2:
+        low_mask = row_scores <= row_scores.median()
+    ambient_rows = all_y[low_mask] if low_mask.shape[0] == all_y.shape[0] else all_y
+    object_basis = _fast_basis_with_rows(
+        torch.cat([target_state, effects], dim=0),
+        max(1, min(int(ambient_rank), d_model)),
+        d_model,
+    )
+    ambient_raw = _fast_basis_with_rows(ambient_rows, max(1, int(ambient_rank) * 2), d_model)
+    if object_basis.numel() > 0 and ambient_raw.numel() > 0:
+        ambient_resid = ambient_raw - (ambient_raw @ object_basis.T) @ object_basis
+    else:
+        ambient_resid = ambient_raw
+    ambient_basis = _fast_basis_with_rows(ambient_resid, max(1, int(ambient_rank)), d_model)
+    if ambient_basis.numel() > 0:
+        ambient_energy = torch.linalg.vector_norm(effects @ ambient_basis.T, dim=1).square()
+        effect_energy = torch.linalg.vector_norm(effects, dim=1).square().clamp_min(float(eps))
+        row_ambient = ambient_energy / effect_energy
+    else:
+        row_ambient = torch.zeros(n_rows, dtype=torch.float32)
+
+    temp = max(float(trust_temperature), float(eps))
+    floor = min(max(float(trust_floor), 0.0), 1.0)
+    logits = (row_improvement - float(trust_threshold) - float(ambient_weight) * row_ambient) / temp
+    row_trust = floor + (1.0 - floor) * torch.sigmoid(logits)
+
+    total_before = float((before_pair_error.sum() / edge_weight.sum().clamp_min(float(eps))).item())
+    total_after = float((after_pair_error.sum() / edge_weight.sum().clamp_min(float(eps))).item())
+    diagnostics.update(
+        {
+            "wm_coherence_fallback": 0.0,
+            "wm_coherence_rows": float(n_rows),
+            "wm_coherence_graph_top_k": float(pair_count),
+            "wm_coherence_trust_mean": float(row_trust.mean().item()),
+            "wm_coherence_trust_min": float(row_trust.min().item()),
+            "wm_coherence_trust_max": float(row_trust.max().item()),
+            "wm_coherence_improvement_mean": float(row_improvement.mean().item()),
+            "wm_coherence_improvement_p90": float(torch.quantile(row_improvement, 0.9).item()),
+            "wm_coherence_ambient_mean": float(row_ambient.mean().item()),
+            "wm_coherence_graph_error_before": total_before,
+            "wm_coherence_graph_error_after": total_after,
+            "wm_coherence_graph_error_delta": total_after - total_before,
+            "wm_coherence_signal_kept_fraction": float(((row_trust * row_before).sum() / row_before.sum().clamp_min(float(eps))).item()),
+            "wm_coherence_future_weight": used_future_weight,
+            "wm_coherence_ambient_rank": float(ambient_basis.shape[0]),
+        }
+    )
+    return WmCoherenceResult(
+        row_trust=row_trust.contiguous(),
+        row_improvement=row_improvement.contiguous(),
+        row_ambient=row_ambient.contiguous(),
         diagnostics=diagnostics,
     )
 
