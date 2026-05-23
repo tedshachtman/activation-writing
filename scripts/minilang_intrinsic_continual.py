@@ -195,6 +195,7 @@ def parse_args() -> argparse.Namespace:
             "prism_q",
             "tdmi_q",
             "wm_coherence",
+            "tag_ce",
             "trace_q",
             "spectra",
             "seal_qrico",
@@ -279,6 +280,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wm-ambient-rank", type=int, default=16)
     parser.add_argument("--wm-ambient-weight", type=float, default=0.15)
     parser.add_argument("--wm-disable-future", action="store_true")
+    parser.add_argument("--tagce-max-object-nodes", type=int, default=96)
+    parser.add_argument("--tagce-max-ambient-nodes", type=int, default=96)
+    parser.add_argument("--tagce-max-object-edges", type=int, default=192)
+    parser.add_argument("--tagce-max-ambient-edges", type=int, default=192)
+    parser.add_argument("--tagce-edge-smooth-alpha", type=float, default=0.35)
+    parser.add_argument("--tagce-edge-sim-top-k", type=int, default=8)
+    parser.add_argument("--tagce-posture-rank", type=int, default=64)
+    parser.add_argument("--tagce-edge-nuisance-rank", type=int, default=32)
+    parser.add_argument("--tagce-ambient-key-rank", type=int, default=16)
+    parser.add_argument("--tagce-eta-ambient", type=float, default=0.25)
+    parser.add_argument("--tagce-eta-posture-ambient", type=float, default=1.0)
+    parser.add_argument("--tagce-layer-veto-budget", type=float, default=0.75)
+    parser.add_argument("--tagce-disable-layer-veto", action="store_true")
+    parser.add_argument("--tagce-disable-schur", action="store_true")
+    parser.add_argument("--tagce-disable-graph-settle", action="store_true")
+    parser.add_argument("--tagce-shuffle-edge-targets", action="store_true")
+    parser.add_argument("--tagce-shuffle-incidence", action="store_true")
     parser.add_argument("--prism-horizon", type=int, default=4)
     parser.add_argument("--prism-signal-rank", type=int, default=16)
     parser.add_argument("--prism-hazard-rank", type=int, default=16)

@@ -50,6 +50,7 @@ from caic.intrinsic_surprise import (
     select_intrinsic_surprise_write,
     sharp_karp_purify_update,
     spectra_purify_update,
+    tag_ce_purify_update,
 )
 from caic.modeling import (
     capture_attention_io,
@@ -2528,6 +2529,7 @@ def parse_args() -> argparse.Namespace:
             "prism_q",
             "tdmi_q",
             "wm_coherence",
+            "tag_ce",
             "trace_q",
             "spectra",
             "seal_qrico",
@@ -2612,6 +2614,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wm-ambient-rank", type=int, default=16)
     parser.add_argument("--wm-ambient-weight", type=float, default=0.15)
     parser.add_argument("--wm-disable-future", action="store_true")
+    parser.add_argument("--tagce-max-object-nodes", type=int, default=96)
+    parser.add_argument("--tagce-max-ambient-nodes", type=int, default=96)
+    parser.add_argument("--tagce-max-object-edges", type=int, default=192)
+    parser.add_argument("--tagce-max-ambient-edges", type=int, default=192)
+    parser.add_argument("--tagce-edge-smooth-alpha", type=float, default=0.35)
+    parser.add_argument("--tagce-edge-sim-top-k", type=int, default=8)
+    parser.add_argument("--tagce-posture-rank", type=int, default=64)
+    parser.add_argument("--tagce-edge-nuisance-rank", type=int, default=32)
+    parser.add_argument("--tagce-ambient-key-rank", type=int, default=16)
+    parser.add_argument("--tagce-eta-ambient", type=float, default=0.25)
+    parser.add_argument("--tagce-eta-posture-ambient", type=float, default=1.0)
+    parser.add_argument("--tagce-layer-veto-budget", type=float, default=0.75)
+    parser.add_argument("--tagce-disable-layer-veto", action="store_true")
+    parser.add_argument("--tagce-disable-schur", action="store_true")
+    parser.add_argument("--tagce-disable-graph-settle", action="store_true")
+    parser.add_argument("--tagce-shuffle-edge-targets", action="store_true")
+    parser.add_argument("--tagce-shuffle-incidence", action="store_true")
     parser.add_argument("--prism-horizon", type=int, default=4)
     parser.add_argument("--prism-signal-rank", type=int, default=16)
     parser.add_argument("--prism-hazard-rank", type=int, default=16)
@@ -3978,6 +3997,49 @@ def run_intrinsic_surprise_writes(
                 if selection.diagnostics is None:
                     selection.diagnostics = {}
                 selection.diagnostics.update(wm.diagnostics)
+            elif args.intrinsic_target_purifier == "tag_ce":
+                tag = tag_ce_purify_update(
+                    update,
+                    keys=selection.keys,
+                    targets=targets,
+                    weights=positive_weights,
+                    all_keys=usable_keys,
+                    all_outputs=captures[layer_idx].outputs[: usable_keys.shape[0]],
+                    token_indices=selection.token_indices,
+                    layer=layer,
+                    negative_keys=negative_keys,
+                    output_basis=karp_output_basis,
+                    max_object_nodes=args.tagce_max_object_nodes,
+                    max_ambient_nodes=args.tagce_max_ambient_nodes,
+                    max_object_edges=args.tagce_max_object_edges,
+                    max_ambient_edges=args.tagce_max_ambient_edges,
+                    edge_smooth_alpha=args.tagce_edge_smooth_alpha,
+                    edge_sim_top_k=args.tagce_edge_sim_top_k,
+                    posture_rank=args.tagce_posture_rank,
+                    edge_nuisance_rank=args.tagce_edge_nuisance_rank,
+                    ambient_key_rank=args.tagce_ambient_key_rank,
+                    eta_ambient=args.tagce_eta_ambient,
+                    eta_posture_ambient=args.tagce_eta_posture_ambient,
+                    negative_weight=args.intrinsic_surprise_input_penalty_weight,
+                    ridge=args.ridge,
+                    layer_veto_budget=args.tagce_layer_veto_budget,
+                    disable_layer_veto=args.tagce_disable_layer_veto,
+                    disable_schur=args.tagce_disable_schur,
+                    disable_graph_settle=args.tagce_disable_graph_settle,
+                    shuffle_edge_targets=args.tagce_shuffle_edge_targets,
+                    shuffle_incidence=args.tagce_shuffle_incidence,
+                    low_surprise_quantile=args.karp_low_surprise_quantile,
+                )
+                update = tag.update
+                fit = selection.keys.detach().float() @ update.T
+                stats.fit_rmse = float(torch.sqrt(torch.mean((fit - targets.detach().float()).square())).item())
+                stats.update_fro = float(torch.linalg.vector_norm(update).item())
+                if negative_keys is not None and negative_keys.numel() > 0:
+                    neg_fit = negative_keys.detach().float() @ update.T
+                    stats.negative_rmse = float(torch.sqrt(torch.mean(neg_fit.square())).item())
+                if selection.diagnostics is None:
+                    selection.diagnostics = {}
+                selection.diagnostics.update(tag.diagnostics)
             elif args.intrinsic_target_purifier == "tdmi_q":
                 preliminary_qrico = qrico_purify_update(
                     update,

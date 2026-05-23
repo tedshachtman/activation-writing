@@ -7610,3 +7610,137 @@ Interpretation:
 - The theory remains useful, but the implementation needs a stronger object:
   likely a map-level or trajectory-level coherence quotient, not row-level
   pairwise graph reweighting.
+
+## 2026-05-23: TAG-CE Edge-Field Coherence Proposal
+
+GPT-5.5 Pro sharpened the global working-memory theory into a concrete next
+object: do not fit node displacements. Fit an edge-field over the instantiated
+working-memory graph.
+
+Name: `TAG-CE`, for Trajectory-Attention Graph Coherence Energy.
+
+Core interpretation:
+
+\[
+\boxed{
+\text{fit the relation-field deformation, not the node displacement.}
+}
+\]
+
+For a layer with selected relational/context-value rows:
+
+\[
+K\in\mathbb{R}^{n\times m},\qquad
+R\in\mathbb{R}^{n\times d},\qquad
+H\in\mathbb{R}^{n\times d},
+\]
+
+build an object graph over selected same-pass working-memory nodes and let
+
+\[
+B\in\mathbb{R}^{e\times n}
+\]
+
+be its weighted incidence matrix. The raw node target becomes an edge-field
+target:
+
+\[
+D = BR,
+\qquad
+\Delta Y(M)=BKM.
+\]
+
+TAG-CE then:
+
+1. builds object edges from key/residual similarity, recurrence, and sparse
+   closure constraints;
+2. smooths the edge target over an edge-adjacency graph;
+3. projects the smoothed edge field back into the column space of the incidence
+   matrix so the target is representable as a coherent node-potential field;
+4. builds low-surprise ambient/default edge rows from the same pass;
+5. absorbs generic edge-pattern x posture/readout-value components with a
+   Schur-style latent nuisance field that is explained but not written;
+6. solves closed-form ridge systems over edge rows.
+
+The key purification criterion is conditional:
+
+\[
+\boxed{
+\text{readout/posture value directions are allowed only when their edge pattern
+is object-specific.}
+}
+\]
+
+This differs from Q-RICO/SHARP/OCEP/TRACE-style local output filters. A value
+direction is not treated as toxic because it touches readout. It is toxic only
+when the edge pattern is generic/posture-like. Conversely, a readout-active
+target survives when the context graph requires it to make object/rule/example
+relations mutually consistent.
+
+This directly addresses the failure of `wm_coherence`: row-level graph trust
+was still scalar reweighting of a node actuator. TAG-CE changes the regression
+coordinate itself from `K M ~= R` to `B K M ~= D*`, where `D*` is the settled
+coherent relation-field target.
+
+### Implemented Probe
+
+I added a first fast implementation:
+
+- purifier mode: `--intrinsic-target-purifier tag_ce`
+- implementation: `caic/intrinsic_surprise.py::tag_ce_purify_update`
+- fast preset: `scripts/continual_benchmark_grid.py --preset tag_ce_fast`
+- ablation presets:
+  - `tag_ce_schur_off_fast`
+  - `tag_ce_no_graph_settle_fast`
+  - `tag_ce_shuffle_edges_fast`
+
+The first implementation intentionally omits attention tensors and exact
+trajectory transport so it can run in the current reduced two-task fixture. It
+uses selected key/residual similarity and closure edges for the object graph,
+low-surprise same-pass states for the ambient graph, and an output/low-surprise
+posture basis for Schur absorption.
+
+Synthetic tests added:
+
+1. generic posture edge fields in the nuisance edge span are absorbed and
+   produce a smaller update than Schur-off;
+2. object-specific readout edge fields survive and reduce object edge error.
+
+Current local verification:
+
+- `pytest tests/test_intrinsic_surprise.py -q` passes (`43 passed`).
+- A local reduced benchmark was started on this Mac/MPS machine. The first
+  attempt exposed an efficiency issue: Transformers was importing TensorFlow
+  before model load. I patched `caic/modeling.py` to set
+  `TRANSFORMERS_NO_TF=1`, `TRANSFORMERS_NO_FLAX=1`, `USE_TF=0`, and `USE_FLAX=0`
+  before importing Transformers.
+- A tiny MPS smoke run completed:
+  - output: `runs/tagce_smoke_mps`
+  - task setup: one task, one lesson, two examples, one eval item, layer 27
+  - sentinel c2w: `0/10`
+  - edited task accuracy: `0/1` with context teacher `1/1`
+  - TAG-CE diagnostics: `object_edges=64`, `ambient_edges=64`,
+    `object_energy_delta=86253.3`, `ambient_energy_after=232990.6`,
+    `layer_scale=0.523`, `update_fro_after=0.462`
+  - interpretation: the smoke validates the end-to-end model write path and
+    sentinel safety on a tiny case, but it is not an acquisition result. The
+    large ambient/object ratio suggests the first layer-veto/ambient penalty may
+    be over-shrinking the actual update.
+
+First promotion bar remains:
+
+| Stage | Target |
+| --- | --- |
+| after task0 | task0 `>=2/4`, c2w `0`, before-correct drop `<=1.0` |
+| after task1 | task0 retained within one item, task1 `>=2/4`, c2w `0`, drop `<=1.25` |
+
+Required falsifiers:
+
+- `tag_ce_no_graph_settle_fast` matching TAG-CE means graph settling is
+  decorative.
+- `tag_ce_schur_off_fast` not becoming less safe means Schur posture absorption
+  is not isolating posture.
+- `tag_ce_shuffle_edges_fast` retaining acquisition means the method is still
+  writing broad posture/mode rather than graph coherence.
+- matched-Fro raw relational matching TAG-CE would mean the method is just a
+  scale change.

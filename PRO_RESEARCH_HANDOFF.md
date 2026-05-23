@@ -93,6 +93,39 @@ It acquired task0 and was c2w-clean after task0, but failed sequentially:
 Interpretation: row-level graph trust is still a reweighted unsafe actuator. It
 is not the global coherence-energy update.
 
+### Latest Local Update: TAG-CE Probe Implemented
+
+Your latest proposal was `TAG-CE`: lift relational/context-value node targets
+into an object graph edge field, settle that edge field, absorb generic
+edge-pattern x posture/readout-value nuisance, then solve closed-form ridge over
+edge rows.
+
+I implemented the first fast probe:
+
+- purifier: `--intrinsic-target-purifier tag_ce`
+- core function: `tag_ce_purify_update(...)`
+- fast preset: `tag_ce_fast`
+- ablations: `tag_ce_schur_off_fast`, `tag_ce_no_graph_settle_fast`,
+  `tag_ce_shuffle_edges_fast`
+- tests: generic posture edge absorption and object-specific readout edge
+  preservation
+
+Verification so far:
+
+- focused tests pass: `pytest tests/test_intrinsic_surprise.py -q` -> `43 passed`
+- tiny MPS smoke path completed end-to-end:
+  - one task, one lesson, two examples, one eval item, layer 27
+  - context teacher `1/1`, edited `0/1`
+  - sentinel c2w `0/10`
+  - TAG-CE diagnostics: `object_energy_delta=86253.3`,
+    `ambient_energy_after=232990.6`, `layer_scale=0.523`,
+    `update_fro_after=0.462`
+
+Interpretation: implementation is runnable and c2w-clean on the tiny smoke, but
+it did not acquire. The ambient/object energy ratio suggests the first TAG-CE
+layer veto or ambient penalty may be over-shrinking the actual update. The
+proper reduced two-task CUDA fixture is still the next decisive run.
+
 ### Hard Constraints
 
 Please satisfy all constraints:

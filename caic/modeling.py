@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
+import os
 import re
 from typing import Any, Iterator
 
@@ -363,6 +364,10 @@ def load_model_and_tokenizer(
     trust_remote_code: bool = True,
     attn_implementation: str | None = None,
 ) -> tuple[Any, Any, torch.device]:
+    os.environ.setdefault("TRANSFORMERS_NO_TF", "1")
+    os.environ.setdefault("TRANSFORMERS_NO_FLAX", "1")
+    os.environ.setdefault("USE_TF", "0")
+    os.environ.setdefault("USE_FLAX", "0")
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     resolved_device = resolve_device(device)

@@ -18,6 +18,7 @@ from caic.intrinsic_surprise import (
     ocep_purify_update,
     prism_q_purify_update,
     qrico_purify_update,
+    tag_ce_purify_update,
     tdmi_q_transport_scores,
     trace_q_purify_update,
     wm_coherence_scores,
@@ -1672,3 +1673,119 @@ def test_wm_coherence_scores_prefer_graph_settling_update():
     assert good.diagnostics["wm_coherence_graph_error_after"] < good.diagnostics["wm_coherence_graph_error_before"]
     assert good.row_trust.mean() > bad.row_trust.mean()
     assert good.row_improvement.mean() > bad.row_improvement.mean()
+
+
+def test_tag_ce_absorbs_generic_posture_edge_field():
+    keys = torch.tensor(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+        ]
+    )
+    current = torch.tensor(
+        [
+            [0.0, 0.0],
+            [0.2, 0.0],
+            [0.4, 0.0],
+            [0.6, 0.0],
+        ]
+    )
+    targets = torch.tensor(
+        [
+            [0.0, 0.0],
+            [0.0, 1.0],
+            [0.0, 2.0],
+            [0.0, 3.0],
+        ]
+    )
+    weights = torch.ones(4)
+    base_update = torch.ones(2, 3)
+    posture = torch.tensor([[0.0, 1.0]])
+
+    absorbed = tag_ce_purify_update(
+        base_update,
+        keys=keys,
+        targets=targets,
+        weights=weights,
+        all_keys=keys,
+        all_outputs=current,
+        token_indices=torch.arange(4),
+        output_basis=posture,
+        max_object_nodes=4,
+        max_ambient_nodes=4,
+        max_object_edges=8,
+        max_ambient_edges=8,
+        edge_nuisance_rank=4,
+        ambient_key_rank=2,
+        disable_graph_settle=True,
+        disable_layer_veto=True,
+        ridge=1e-3,
+    )
+    unabsorbed = tag_ce_purify_update(
+        base_update,
+        keys=keys,
+        targets=targets,
+        weights=weights,
+        all_keys=keys,
+        all_outputs=current,
+        token_indices=torch.arange(4),
+        output_basis=posture,
+        max_object_nodes=4,
+        max_ambient_nodes=4,
+        max_object_edges=8,
+        max_ambient_edges=8,
+        disable_schur=True,
+        disable_graph_settle=True,
+        disable_layer_veto=True,
+        ridge=1e-3,
+    )
+
+    assert absorbed.update.shape == base_update.shape
+    assert absorbed.diagnostics["tag_ce_enabled"] == 1.0
+    assert absorbed.diagnostics["tag_ce_posture_absorbed_ratio"] > 0.1
+    assert torch.linalg.vector_norm(absorbed.update) < torch.linalg.vector_norm(unabsorbed.update)
+
+
+def test_tag_ce_keeps_object_specific_readout_edge_field():
+    keys = torch.eye(4)
+    current = torch.tensor(
+        [
+            [1.0, 0.0],
+            [0.8, 0.2],
+            [0.0, 1.0],
+            [0.2, 0.8],
+        ]
+    )
+    targets = torch.tensor(
+        [
+            [0.0, 0.0],
+            [0.0, 1.0],
+            [0.0, 0.0],
+            [0.0, -1.0],
+        ]
+    )
+    result = tag_ce_purify_update(
+        torch.ones(2, 4),
+        keys=keys,
+        targets=targets,
+        weights=torch.ones(4),
+        all_keys=keys,
+        all_outputs=current,
+        token_indices=torch.arange(4),
+        output_basis=torch.tensor([[0.0, 1.0]]),
+        max_object_nodes=4,
+        max_ambient_nodes=4,
+        max_object_edges=8,
+        max_ambient_edges=8,
+        edge_nuisance_rank=1,
+        ambient_key_rank=1,
+        disable_graph_settle=True,
+        disable_layer_veto=True,
+        ridge=1e-3,
+    )
+
+    assert result.update.shape == (2, 4)
+    assert torch.linalg.vector_norm(result.update) > 0.0
+    assert result.diagnostics["tag_ce_object_energy_delta"] > 0.0

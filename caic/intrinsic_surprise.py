@@ -196,6 +196,21 @@ class WmCoherenceResult:
 
 
 @dataclass
+class TagCeResult:
+    """TAG-CE edge-field coherence update plus diagnostics.
+
+    ``update`` is row-major MLP down delta, shaped ``[d_model, d_ff]``.  TAG-CE
+    lifts selected node targets into an object graph edge field, settles that
+    relation field, absorbs generic edge-pattern x posture-value nuisance, and
+    solves closed-form ridge systems over the remaining object-specific edge
+    rows.
+    """
+
+    update: torch.Tensor
+    diagnostics: dict[str, float]
+
+
+@dataclass
 class OcepPurificationResult:
     """OCEP-purified update plus diagnostics.
 
@@ -4251,6 +4266,460 @@ def wm_coherence_scores(
         row_ambient=row_ambient.contiguous(),
         diagnostics=diagnostics,
     )
+
+
+def _tagce_incidence_graph(
+    keys: torch.Tensor,
+    states: torch.Tensor,
+    weights: torch.Tensor,
+    token_indices: torch.Tensor | None,
+    *,
+    max_nodes: int,
+    max_edges: int,
+    top_k: int,
+    add_closure: bool = True,
+    eps: float = 1e-6,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Build a small deterministic object/ambient incidence graph.
+
+    Returns selected node indices into the input rows, incidence matrix ``B``
+    shaped ``[edges, nodes]``, and edge weights ``[edges]``.  Edges are selected
+    from key/state similarity and a light second-hop closure pass.  This is the
+    fast TAG-CE graph builder; attention-supported edges can be added later
+    without changing the downstream solve.
+    """
+
+    k = torch.nan_to_num(keys.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    h = torch.nan_to_num(states.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    w = torch.nan_to_num(weights.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+    if k.ndim != 2 or h.ndim != 2 or k.shape[0] != h.shape[0] or w.ndim != 1 or w.shape[0] != k.shape[0]:
+        raise ValueError("TAG-CE graph inputs must be matching row matrices")
+    n_total = k.shape[0]
+    if n_total < 2:
+        return torch.arange(n_total), torch.empty(0, n_total, dtype=torch.float32), torch.empty(0)
+    keep_nodes = max(2, min(int(max_nodes), n_total)) if max_nodes > 0 else n_total
+    if keep_nodes < n_total:
+        score = w
+        if float(score.max().item()) <= float(eps):
+            score = torch.linalg.vector_norm(k, dim=1) + torch.linalg.vector_norm(h, dim=1)
+        node_idx = torch.topk(score, k=keep_nodes, largest=True).indices.sort().values
+    else:
+        node_idx = torch.arange(n_total)
+    k_node = k[node_idx]
+    h_node = h[node_idx]
+    w_node = w[node_idx]
+    n = k_node.shape[0]
+    if n < 2:
+        return node_idx, torch.empty(0, n, dtype=torch.float32), torch.empty(0)
+
+    k_n = F.normalize(k_node, dim=1, eps=float(eps))
+    h_n = F.normalize(h_node, dim=1, eps=float(eps))
+    sim = 0.5 * (k_n @ k_n.T) + 0.5 * (h_n @ h_n.T)
+    sim = torch.nan_to_num(sim, nan=0.0, posinf=0.0, neginf=0.0)
+    if token_indices is not None and token_indices.numel() >= n_total:
+        pos = token_indices.detach().float().cpu()[node_idx]
+        dist = (pos.unsqueeze(0) - pos.unsqueeze(1)).abs()
+        pos_bonus = torch.exp(-dist / dist.median().clamp_min(1.0))
+        sim = sim + 0.05 * pos_bonus
+    sim.fill_diagonal_(-1.0)
+    neighbor_count = max(1, min(int(top_k), n - 1))
+    top = torch.topk(sim, k=neighbor_count, dim=1, largest=True).indices
+    edge_scores: dict[tuple[int, int], float] = {}
+    for i in range(n):
+        for j_t in top[i]:
+            j = int(j_t.item())
+            if i == j:
+                continue
+            a, b = (i, j) if i < j else (j, i)
+            base = max(float(sim[i, j].item()), 0.0) + float(eps)
+            mass = float((w_node[i].clamp_min(0.0) * w_node[j].clamp_min(0.0)).sqrt().item())
+            edge_scores[(a, b)] = max(edge_scores.get((a, b), 0.0), base * (mass + float(eps)))
+    if add_closure and edge_scores:
+        adjacency: dict[int, list[tuple[int, float]]] = {i: [] for i in range(n)}
+        for (i, j), score in edge_scores.items():
+            adjacency[i].append((j, score))
+            adjacency[j].append((i, score))
+        closure_scores: dict[tuple[int, int], float] = {}
+        for i, neighbors in adjacency.items():
+            strongest = sorted(neighbors, key=lambda item: item[1], reverse=True)[: max(1, min(3, neighbor_count))]
+            for j, s_ij in strongest:
+                for k2, s_jk in sorted(adjacency.get(j, []), key=lambda item: item[1], reverse=True)[:2]:
+                    if k2 == i:
+                        continue
+                    a, b = (i, k2) if i < k2 else (k2, i)
+                    if a == b or (a, b) in edge_scores:
+                        continue
+                    closure_scores[(a, b)] = max(closure_scores.get((a, b), 0.0), 0.35 * (s_ij * s_jk) ** 0.5)
+        edge_scores.update(closure_scores)
+    if not edge_scores:
+        return node_idx, torch.empty(0, n, dtype=torch.float32), torch.empty(0)
+    kept = sorted(edge_scores.items(), key=lambda item: item[1], reverse=True)
+    if max_edges > 0:
+        kept = kept[: int(max_edges)]
+    b_mat = torch.zeros(len(kept), n, dtype=torch.float32)
+    edge_w = torch.empty(len(kept), dtype=torch.float32)
+    for row, ((i, j), score) in enumerate(kept):
+        scale = max(float(score), float(eps)) ** 0.5
+        b_mat[row, i] = -scale
+        b_mat[row, j] = scale
+        edge_w[row] = float(score)
+    return node_idx.contiguous(), b_mat.contiguous(), edge_w.contiguous()
+
+
+def _tagce_settle_edge_target(
+    incidence: torch.Tensor,
+    edge_keys: torch.Tensor,
+    raw_edge_target: torch.Tensor,
+    *,
+    smooth_alpha: float,
+    edge_sim_top_k: int,
+    disable_graph_settle: bool = False,
+    eps: float = 1e-6,
+) -> tuple[torch.Tensor, float]:
+    """Smooth an edge target and project it back to a node-potential field."""
+
+    b = incidence.detach().float()
+    x = torch.nan_to_num(edge_keys.detach().float(), nan=0.0, posinf=0.0, neginf=0.0)
+    d = torch.nan_to_num(raw_edge_target.detach().float(), nan=0.0, posinf=0.0, neginf=0.0)
+    if disable_graph_settle or b.shape[0] < 2 or float(smooth_alpha) <= 0.0:
+        d_smooth = d
+    else:
+        x_n = F.normalize(x, dim=1, eps=float(eps))
+        d_n = F.normalize(d, dim=1, eps=float(eps))
+        sim = 0.5 * (x_n @ x_n.T) + 0.5 * (d_n @ d_n.T)
+        sim = torch.nan_to_num(sim, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+        sim.fill_diagonal_(0.0)
+        k_neighbors = max(1, min(int(edge_sim_top_k), sim.shape[0] - 1))
+        idx = torch.topk(sim, k=k_neighbors, dim=1, largest=True).indices
+        adj = torch.zeros_like(sim)
+        adj.scatter_(1, idx, sim.gather(1, idx))
+        adj = torch.maximum(adj, adj.T)
+        deg = adj.sum(dim=1)
+        inv_sqrt = deg.clamp_min(float(eps)).rsqrt()
+        lap = torch.eye(adj.shape[0], dtype=torch.float32) - inv_sqrt.unsqueeze(1) * adj * inv_sqrt.unsqueeze(0)
+        smooth_system = torch.eye(adj.shape[0], dtype=torch.float32) + float(smooth_alpha) * lap
+        d_smooth = _solve_symmetric_psd(smooth_system, d)
+
+    node_system = b.T @ b + float(eps) * torch.eye(b.shape[1], dtype=torch.float32)
+    node_potential = _solve_symmetric_psd(node_system, b.T @ d_smooth)
+    d_star = b @ node_potential
+    curl = torch.linalg.vector_norm(d_smooth - d_star).square() / torch.linalg.vector_norm(d_smooth).square().clamp_min(float(eps))
+    return d_star.contiguous(), float(curl.item())
+
+
+def _tagce_edge_nuisance_basis(
+    edge_keys: torch.Tensor,
+    object_keys: torch.Tensor,
+    ambient_keys: torch.Tensor,
+    incidence: torch.Tensor,
+    edge_weights: torch.Tensor,
+    *,
+    rank: int,
+    ambient_key_rank: int,
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    if rank <= 0 or edge_keys.numel() == 0:
+        return torch.empty(edge_keys.shape[0], 0, dtype=torch.float32)
+    x = torch.nan_to_num(edge_keys.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    obj = torch.nan_to_num(object_keys.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    amb = torch.nan_to_num(ambient_keys.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    factors: list[torch.Tensor] = []
+    if amb.numel() > 0:
+        generic_rows = _fast_mixed_signal_risk_candidate_basis(
+            obj,
+            amb,
+            None,
+            dim=obj.shape[1],
+            rank=max(1, int(ambient_key_rank)),
+            eps=eps,
+        )[0]
+        if generic_rows.numel() > 0:
+            factors.append(x @ generic_rows.T)
+    b_abs = incidence.detach().float().abs()
+    structural = [b_abs.sum(dim=1, keepdim=True)]
+    if edge_weights.numel() == incidence.shape[0]:
+        structural.append(torch.log1p(edge_weights.detach().float()).unsqueeze(1))
+    degree = b_abs.T @ torch.ones(b_abs.shape[0], 1, dtype=torch.float32)
+    structural.append(b_abs @ degree)
+    factors.append(torch.cat(structural, dim=1))
+    mat = torch.cat([f for f in factors if f.numel() > 0], dim=1)
+    mat = torch.nan_to_num(mat, nan=0.0, posinf=0.0, neginf=0.0)
+    mat = mat - mat.mean(dim=0, keepdim=True)
+    if float(torch.linalg.vector_norm(mat).item()) <= float(eps):
+        return torch.empty(edge_keys.shape[0], 0, dtype=torch.float32)
+    q, _r = torch.linalg.qr(mat, mode="reduced")
+    return q[:, : min(int(rank), q.shape[1])].contiguous()
+
+
+def _tagce_ridge_map(
+    key_rows: list[torch.Tensor],
+    target_rows: list[torch.Tensor],
+    *,
+    ridge: float,
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    keys = [torch.nan_to_num(row.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0) for row in key_rows if row.numel() > 0]
+    targets = [
+        torch.nan_to_num(row.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+        for row in target_rows
+        if row.numel() > 0
+    ]
+    if not keys or len(keys) != len(targets):
+        raise ValueError("TAG-CE ridge solve requires matching non-empty key/target blocks")
+    x = torch.cat(keys, dim=0)
+    y = torch.cat(targets, dim=0)
+    if x.shape[0] != y.shape[0]:
+        raise ValueError("TAG-CE ridge key/target row mismatch")
+    system = x @ x.T + max(float(ridge), float(eps)) * torch.eye(x.shape[0], dtype=torch.float32)
+    coeff = _solve_symmetric_psd(system, y)
+    return (x.T @ coeff).contiguous()
+
+
+def tag_ce_purify_update(
+    update: torch.Tensor,
+    *,
+    keys: torch.Tensor,
+    targets: torch.Tensor,
+    weights: torch.Tensor,
+    all_keys: torch.Tensor,
+    all_outputs: torch.Tensor,
+    token_indices: torch.Tensor,
+    layer: nn.Module | None = None,
+    negative_keys: torch.Tensor | None = None,
+    output_basis: torch.Tensor | None = None,
+    max_object_nodes: int = 96,
+    max_ambient_nodes: int = 96,
+    max_object_edges: int = 192,
+    max_ambient_edges: int = 192,
+    edge_smooth_alpha: float = 0.35,
+    edge_sim_top_k: int = 8,
+    posture_rank: int = 64,
+    edge_nuisance_rank: int = 32,
+    ambient_key_rank: int = 16,
+    eta_ambient: float = 0.25,
+    eta_posture_ambient: float = 1.0,
+    negative_weight: float = 20.0,
+    ridge: float = 1e-3,
+    layer_veto_budget: float = 0.75,
+    disable_layer_veto: bool = False,
+    disable_schur: bool = False,
+    disable_graph_settle: bool = False,
+    shuffle_edge_targets: bool = False,
+    shuffle_incidence: bool = False,
+    low_surprise_quantile: float = 0.35,
+    eps: float = 1e-6,
+) -> TagCeResult:
+    """TAG-CE edge-lifted graph-coherence purifier for relational writes."""
+
+    update_f = torch.nan_to_num(update.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    k = torch.nan_to_num(keys.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    y = torch.nan_to_num(targets.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    w = torch.nan_to_num(weights.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+    all_k = torch.nan_to_num(all_keys.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    all_h = torch.nan_to_num(all_outputs.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    tok = token_indices.detach().cpu().long()
+    if update_f.ndim != 2:
+        raise ValueError(f"update must be [d,m], got {tuple(update_f.shape)}")
+    d_model, d_ff = update_f.shape
+    if k.ndim != 2 or k.shape[1] != d_ff or y.ndim != 2 or y.shape[1] != d_model or k.shape[0] != y.shape[0]:
+        raise ValueError("TAG-CE keys/targets do not match update shape")
+    if w.ndim != 1 or w.shape[0] != k.shape[0]:
+        raise ValueError("TAG-CE weights must align with selected rows")
+    if all_k.ndim != 2 or all_k.shape[1] != d_ff or all_h.ndim != 2 or all_h.shape[1] != d_model:
+        raise ValueError("TAG-CE all_keys/all_outputs do not match update shape")
+
+    diagnostics: dict[str, float] = {
+        "tag_ce_enabled": 1.0,
+        "tag_ce_update_fro_before": float(torch.linalg.vector_norm(update_f).item()),
+    }
+    if k.shape[0] < 2:
+        diagnostics["tag_ce_fallback"] = 1.0
+        return TagCeResult(update=update_f.contiguous(), diagnostics=diagnostics)
+
+    selected_tokens = tok.clamp(min=0, max=max(all_h.shape[0] - 1, 0))
+    h_sel = all_h[selected_tokens]
+    node_idx, b_obj, edge_w = _tagce_incidence_graph(
+        k,
+        h_sel,
+        w / w.mean().clamp_min(float(eps)),
+        selected_tokens,
+        max_nodes=max_object_nodes,
+        max_edges=max_object_edges,
+        top_k=edge_sim_top_k,
+        add_closure=True,
+        eps=eps,
+    )
+    if b_obj.shape[0] == 0:
+        diagnostics["tag_ce_fallback"] = 1.0
+        return TagCeResult(update=update_f.contiguous(), diagnostics=diagnostics)
+    k_obj = k[node_idx]
+    y_obj = y[node_idx]
+    if shuffle_incidence and b_obj.shape[1] > 1:
+        b_obj = b_obj[:, torch.roll(torch.arange(b_obj.shape[1]), shifts=1)]
+    x_obj = b_obj @ k_obj
+    d_raw = b_obj @ y_obj
+    d_star, cycle_residual = _tagce_settle_edge_target(
+        b_obj,
+        x_obj,
+        d_raw,
+        smooth_alpha=edge_smooth_alpha,
+        edge_sim_top_k=edge_sim_top_k,
+        disable_graph_settle=disable_graph_settle,
+        eps=eps,
+    )
+    if shuffle_edge_targets and d_star.shape[0] > 1:
+        d_star = torch.roll(d_star, shifts=1, dims=0)
+
+    row_scores = _token_row_surprise(all_k, layer)
+    threshold = torch.quantile(row_scores, min(max(float(low_surprise_quantile), 0.0), 1.0))
+    low_mask = row_scores <= threshold
+    if int(low_mask.sum().item()) < 2:
+        low_mask = row_scores <= row_scores.median()
+    low_idx = torch.nonzero(low_mask, as_tuple=False).flatten()
+    if low_idx.numel() > 0 and max_ambient_nodes > 0:
+        low_score = (row_scores.max() - row_scores[low_idx]).clamp_min(0.0) + float(eps)
+        if low_idx.numel() > max_ambient_nodes:
+            keep = torch.topk(low_score, k=int(max_ambient_nodes), largest=True).indices.sort().values
+            low_idx = low_idx[keep]
+            low_score = low_score[keep]
+        _amb_node_idx, b_amb, _amb_edge_w = _tagce_incidence_graph(
+            all_k[low_idx],
+            all_h[low_idx],
+            low_score,
+            low_idx,
+            max_nodes=max_ambient_nodes,
+            max_edges=max_ambient_edges,
+            top_k=edge_sim_top_k,
+            add_closure=False,
+            eps=eps,
+        )
+        k_amb = all_k[low_idx]
+        x_amb = b_amb @ k_amb if b_amb.numel() > 0 else torch.empty(0, d_ff)
+    else:
+        k_amb = torch.empty(0, d_ff)
+        x_amb = torch.empty(0, d_ff)
+
+    neg = negative_keys.detach().float().cpu() if negative_keys is not None and negative_keys.numel() > 0 else None
+    if neg is not None and (neg.ndim != 2 or neg.shape[1] != d_ff):
+        neg = None
+
+    posture_parts: list[torch.Tensor | None] = []
+    if output_basis is not None and output_basis.numel() > 0:
+        out = output_basis.detach().float().cpu()
+        if out.ndim == 1:
+            out = out.unsqueeze(0)
+        if out.ndim == 2 and out.shape[1] == d_model:
+            posture_parts.append(out[: max(1, int(posture_rank))])
+    if low_idx.numel() > 0:
+        posture_parts.append(_fast_basis_with_rows(all_h[low_idx], max(1, int(posture_rank) // 2), d_model))
+    posture_basis = _orthonormal_basis(posture_parts, d_model)[: max(0, int(posture_rank))]
+
+    def append_neg_blocks(rows: list[torch.Tensor], vals: list[torch.Tensor], output_dim: int, scale: float) -> None:
+        if x_amb.numel() > 0 and scale > 0:
+            rows.append((float(scale) ** 0.5) * x_amb)
+            vals.append(torch.zeros(x_amb.shape[0], output_dim, dtype=torch.float32))
+        if neg is not None and negative_weight > 0:
+            rows.append((float(negative_weight) ** 0.5) * neg)
+            vals.append(torch.zeros(neg.shape[0], output_dim, dtype=torch.float32))
+
+    if disable_schur or posture_basis.numel() == 0:
+        rows = [x_obj]
+        vals = [d_star]
+        append_neg_blocks(rows, vals, d_model, eta_ambient)
+        m_tag = _tagce_ridge_map(rows, vals, ridge=ridge, eps=eps)
+        posture_absorbed = torch.zeros_like(d_star)
+        s_basis = torch.empty(x_obj.shape[0], 0, dtype=torch.float32)
+    else:
+        p = posture_basis
+        d_posture_coeff = d_star @ p.T
+        d_perp = d_star - d_posture_coeff @ p
+        s_basis = _tagce_edge_nuisance_basis(
+            x_obj,
+            k_obj,
+            k_amb if k_amb.numel() > 0 else all_k[low_mask],
+            b_obj,
+            edge_w,
+            rank=edge_nuisance_rank,
+            ambient_key_rank=ambient_key_rank,
+            eps=eps,
+        )
+        if s_basis.numel() > 0:
+            x_posture = x_obj - s_basis @ (s_basis.T @ x_obj)
+            d_posture_resid = d_posture_coeff - s_basis @ (s_basis.T @ d_posture_coeff)
+            posture_absorbed = (s_basis @ (s_basis.T @ d_posture_coeff)) @ p
+        else:
+            x_posture = x_obj
+            d_posture_resid = d_posture_coeff
+            posture_absorbed = torch.zeros_like(d_star)
+
+        rows_perp = [x_obj]
+        vals_perp = [d_perp]
+        append_neg_blocks(rows_perp, vals_perp, d_model, eta_ambient)
+        m_perp = _tagce_ridge_map(rows_perp, vals_perp, ridge=ridge, eps=eps)
+
+        rows_posture = [x_posture]
+        vals_posture = [d_posture_resid]
+        append_neg_blocks(rows_posture, vals_posture, p.shape[0], eta_posture_ambient)
+        theta_posture = _tagce_ridge_map(rows_posture, vals_posture, ridge=max(float(ridge) * 2.0, float(eps)), eps=eps)
+        m_tag = m_perp + theta_posture @ p
+
+    fit_edge = x_obj @ m_tag
+    object_energy_before = torch.linalg.vector_norm(d_star).square().clamp_min(float(eps))
+    object_error_after = torch.linalg.vector_norm(fit_edge - d_star).square()
+    object_delta = object_energy_before - object_error_after
+    ambient_energy = torch.linalg.vector_norm(x_amb @ m_tag).square() if x_amb.numel() > 0 else torch.zeros(())
+    if s_basis.numel() > 0 and posture_basis.numel() > 0:
+        posture_pattern = s_basis.T @ ((x_obj @ m_tag) @ posture_basis.T)
+        posture_energy = torch.linalg.vector_norm(posture_pattern).square()
+    else:
+        posture_energy = torch.zeros(())
+    scale = torch.ones((), dtype=torch.float32)
+    if not disable_layer_veto and float(object_delta.item()) <= 0.0:
+        scale = torch.zeros((), dtype=torch.float32)
+    elif not disable_layer_veto:
+        hazard = ambient_energy + posture_energy
+        budget = max(float(layer_veto_budget), 0.0) * object_delta.clamp_min(float(eps))
+        if float(hazard.item()) > float(budget.item()) > 0.0:
+            scale = torch.sqrt(budget / hazard.clamp_min(float(eps))).clamp(max=1.0)
+    m_tag = m_tag * scale
+
+    before_norm = torch.linalg.vector_norm(update_f).clamp_min(1e-12)
+    update_out = m_tag.T.contiguous()
+    after_norm = torch.linalg.vector_norm(update_out).clamp_min(1e-12)
+    if float(after_norm.item()) > float(before_norm.item()):
+        update_out = update_out * (before_norm / after_norm)
+        after_norm = before_norm
+    fit_rows = k @ update_out.T
+    diagnostics.update(
+        {
+            "tag_ce_fallback": 0.0,
+            "tag_ce_object_nodes": float(k_obj.shape[0]),
+            "tag_ce_object_edges": float(b_obj.shape[0]),
+            "tag_ce_ambient_edges": float(x_amb.shape[0]),
+            "tag_ce_posture_rank": float(posture_basis.shape[0]),
+            "tag_ce_edge_nuisance_rank": float(s_basis.shape[1]) if s_basis.ndim == 2 else 0.0,
+            "tag_ce_graph_cycle_residual": float(cycle_residual),
+            "tag_ce_object_energy_before": float(object_energy_before.item()),
+            "tag_ce_object_error_after": float(object_error_after.item()),
+            "tag_ce_object_energy_delta": float(object_delta.item()),
+            "tag_ce_ambient_energy_after": float(ambient_energy.item()),
+            "tag_ce_posture_generic_energy_after": float(posture_energy.item()),
+            "tag_ce_posture_absorbed_ratio": float(
+                (
+                    torch.linalg.vector_norm(posture_absorbed).square()
+                    / torch.linalg.vector_norm(d_star).square().clamp_min(float(eps))
+                ).item()
+            ),
+            "tag_ce_layer_scale": float(scale.item()),
+            "tag_ce_disable_schur": 1.0 if disable_schur else 0.0,
+            "tag_ce_disable_graph_settle": 1.0 if disable_graph_settle else 0.0,
+            "tag_ce_shuffle_edge_targets": 1.0 if shuffle_edge_targets else 0.0,
+            "tag_ce_shuffle_incidence": 1.0 if shuffle_incidence else 0.0,
+            "tag_ce_update_fro_after": float(after_norm.item()),
+            "tag_ce_fit_rmse": float(torch.sqrt(torch.mean((fit_rows - y).square())).item()),
+        }
+    )
+    return TagCeResult(update=update_out.contiguous(), diagnostics=diagnostics)
 
 
 def qrico_purify_update(
