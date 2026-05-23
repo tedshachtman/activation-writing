@@ -3043,6 +3043,9 @@ current write only; no sidecar state is available between future tasks.
 | DICE raw, `4+4` anti, SVD support space | `0/4` | `4/4` | `0/4` | `0` | `0.013` |
 | DICE raw, `4+4` anti, column support | `0/4` | `4/4` | `1/4` | `1` | `0.655` |
 | DICE raw, `4+4` anti, strict column support | `0/4` | `4/4` | `1/4` | `0` | `0.423` |
+| DICE raw, `4+4` anti, key-effect support | `0/4` | `4/4` | `1/4` | `0` | `0.057` |
+| DICE raw, `4+4` anti, key-edge-effect support | `0/4` | `4/4` | `1/4` | `0` | `0.138` |
+| DICE raw, `4+4` anti, light key-effect support | `0/4` | `4/4` | `1/4` | `1` | `0.529` |
 | DICE raw, `4+4` anti, scale `.25` | `0/4` | `4/4` | `1/4` | `0` | `0.130` |
 | DICE raw, `4+4` anti, loose support | `0/4` | `4/4` | `1/4` | `0` | `0.077` |
 | DICE raw, `8+8` anti | `1/4` | `4/4` | `1/4` | `0` | `0.045` |
@@ -3069,6 +3072,25 @@ Follow-up local findings:
   passes more mass and keeps `1/4`, but reintroduces `1` c2w. A stricter
   column gate recovers `0` c2w and keeps `1/4`, but before-correct drop rises
   to `0.423`, much worse than raw-coordinate `4+4` anti's `0.056`.
+- I added `--dice-support-space key_effect`, which computes support over
+  selected-key effects rather than raw entries or whole feature columns. It
+  matches raw-coordinate safety on the one-task gate (`1/4`, `0` c2w, drop
+  `0.057`) with less sparse support and mean final update Frobenius `0.782`.
+  Loosening the key-effect gate raises update Frobenius to `2.03` but brings
+  back `1` c2w without improving acquisition.
+- I added `--dice-support-space key_edge_effect`, which votes on effects of
+  prototype key differences `(u_a-u_b)M` rather than individual key effects.
+  It keeps the same Lyran `1/4` and `0` c2w, but drift is worse than
+  key-effect support (`0.138` vs `0.057`) and Vomar-only remains `0/4`
+  (`0` c2w, drop `0.173`, mean final Frobenius `0.586`). So naive relational
+  key-edge maplets are not enough.
+- Vomar-only controls weaken the "second write suppression" interpretation.
+  Strict key-effect DICE on Vomar from base gets `0/4`, `0` c2w, drop `0.061`,
+  with mean final update Frobenius `0.867`. A raw-relational Vomar-only local
+  control also gets `0/4` and is unsafe (`2` c2w, drop `4.588`). The selected
+  teacher-filtered items differ across those controls, so this is not a perfect
+  apples-to-apples comparison, but Vomar is clearly a weak local acquisition
+  target here.
 
 Two-task teacher-filtered local gate:
 
@@ -3076,13 +3098,23 @@ Two-task teacher-filtered local gate:
 | --- | ---: | ---: | ---: | ---: | ---: |
 | raw relational | `2/4` from `1/4` baseline | `1/4` | `0/4` from `1/4` baseline | `1` | `4.585` |
 | DICE raw `4+4` anti | `1/4` from `0/4` baseline | `1/4` | `0/4` from `0/4` baseline | `0` | `0.049` |
+| DICE column `4+4` strict anti | `1/4` from `0/4` baseline | `1/4` | `0/4` from `0/4` baseline | `1` | `0.781` |
+| DICE key-effect `4+4` anti | `1/4` from `0/4` baseline | `1/4` | `0/4` from `0/4` baseline | `0` | `0.048` |
+| DICE key-effect reverse order, Vomar then Lyran | Vomar `0/4` from `0/4` baseline | Vomar `0/4` | Lyran `1/4` from `0/4` baseline | `0` | `0.138` |
 
 So DICE anti-support is very safe and retains task0, but still fails to acquire
-task1 on this small local sequential gate. It is not the full solution yet.
-The next refinement needs to recover more threshold-bearing mass while keeping
+Vomar on this small local gate. The reverse-order run is important: Vomar
+fails even as task0, while Lyran still gets `1/4` as task1, and the write norms
+are comparable (`0.867` first-write Vomar, `0.758` second-write Lyran). So the
+failure is not mainly old-key-negative-style suppression of the second write.
+It is a coordinate/payload weakness plus task/split asymmetry. The next
+refinement needs to recover more threshold-bearing mass while keeping
 anti-support's posture cancellation. Raw coordinate support is too sparse; SVD
 support is too blunt/conservative; plain feature-column maplets recover more
-mass but are not clean enough.
+mass but are not clean enough. Key-effect support is currently the cleanest
+DICE coordinate, but it only preserves a small shard; this points to missing
+relational role/effect alignment, target-token grouping, or key-effect
+edgelets rather than simply insufficient update mass.
 
 I added a full reduced-benchmark preset:
 
@@ -3115,11 +3147,12 @@ Specifically, propose the next implementable refinement around:
    relational context-value and ORCA residual-only;
 4. avoiding raw-coordinate consensus deleting the threshold component.
 
-Promising coordinates to consider: key-conditioned row/maplet support,
-target-token grouped support, ORCA-residual components with anti-support, or a
-closed-form quotient that subtracts rival-language common posture from the
-direct relational map without collapsing to a tiny coordinate gate. Plain
-feature-column support was just tested and is not enough by itself: relaxed
-column support reacquired c2w, while strict column support was safe but had much
-higher sentinel margin drift than raw-coordinate anti-support at the same
-`1/4` acquisition.
+Promising coordinates to consider: target-token grouped support, role-aligned
+key/effect maplets richer than naive `(u_a-u_b)M` edgelets, ORCA-residual
+components with anti-support, or a closed-form quotient that subtracts
+rival-language common posture from the direct relational map without collapsing
+to a tiny coordinate gate. Plain feature-column support was just tested and is
+not enough by itself. The first key-effect maplet version is cleaner, but it
+still only learns a small shard; the first key-edge version is also too weak.
+The next question is how to align effects across contexts more semantically
+than pooled selected-key SVD or prototype key differences.

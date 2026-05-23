@@ -51,6 +51,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", default="runs/minilang_intrinsic_continual")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--tasks", type=int, default=3)
+    parser.add_argument(
+        "--task-indices",
+        default="",
+        help="Optional comma-separated task profile indices, e.g. '1' for Vomar only or '1,0' for reverse order.",
+    )
     parser.add_argument("--lessons-per-task", type=int, default=6)
     parser.add_argument("--lesson-examples", type=int, default=8)
     parser.add_argument(
@@ -168,8 +173,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--intrinsic-surprise-birth-trigger-ridge", type=float, default=1e-3)
     parser.add_argument("--write-only-final", action="store_true")
     parser.add_argument("--dice-defer-apply", action="store_true")
-    parser.add_argument("--dice-support-space", choices=["coordinate", "column", "svd"], default="coordinate")
+    parser.add_argument(
+        "--dice-support-space",
+        choices=["coordinate", "column", "key_effect", "key_edge_effect", "svd"],
+        default="coordinate",
+    )
     parser.add_argument("--dice-subspace-rank", type=int, default=8)
+    parser.add_argument("--dice-effect-rank", type=int, default=64)
+    parser.add_argument("--dice-effect-key-cap", type=int, default=1024)
+    parser.add_argument("--dice-effect-ridge", type=float, default=1e-3)
     parser.add_argument("--dice-support-threshold", type=float, default=0.75)
     parser.add_argument("--dice-support-temperature", type=float, default=16.0)
     parser.add_argument("--dice-support-strength", type=float, default=1.0)
@@ -412,7 +424,11 @@ def main() -> None:
     wrappers = install_additive_memory(model, args.layers, memory_dtype=torch.float32)
     progress(f"installed wrappers for {len(wrappers)} layers")
 
-    profiles = [task_profile(idx) for idx in range(args.tasks)]
+    if args.task_indices.strip():
+        task_indices = [int(part.strip()) for part in args.task_indices.split(",") if part.strip()]
+    else:
+        task_indices = list(range(args.tasks))
+    profiles = [task_profile(idx) for idx in task_indices]
     final_lesson_idx = args.lessons_per_task - 1
     lesson_texts: list[list[str]] = []
     dice_anti_lesson_texts: list[list[str]] = []

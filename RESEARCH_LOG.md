@@ -7868,6 +7868,9 @@ Local one-task teacher-filtered gate:
 | DICE raw, `4+4` anti, SVD support space | `0/4` | `4/4` | `0/4` | `0` | `0.013` |
 | DICE raw, `4+4` anti, column support | `0/4` | `4/4` | `1/4` | `1` | `0.655` |
 | DICE raw, `4+4` anti, strict column support | `0/4` | `4/4` | `1/4` | `0` | `0.423` |
+| DICE raw, `4+4` anti, key-effect support | `0/4` | `4/4` | `1/4` | `0` | `0.057` |
+| DICE raw, `4+4` anti, key-edge-effect support | `0/4` | `4/4` | `1/4` | `0` | `0.138` |
+| DICE raw, `4+4` anti, light key-effect support | `0/4` | `4/4` | `1/4` | `1` | `0.529` |
 | DICE raw, `4+4` anti, scale `.15` | `0/4` | `4/4` | `1/4` | `0` | `0.081` |
 | DICE raw, `4+4` anti, scale `.25` | `0/4` | `4/4` | `1/4` | `0` | `0.130` |
 | DICE raw, `4+4` anti, loose support | `0/4` | `4/4` | `1/4` | `0` | `0.077` |
@@ -7909,6 +7912,26 @@ Additional local conclusions:
   update Frobenius around `0.857` and before-correct drop `0.423`. That is
   safer than the relaxed column run, but still worse than raw-coordinate
   `4+4` anti on sentinel margin drift (`0.056`).
+- I then added `--dice-support-space key_effect`, which builds a canonical
+  selected-key basis from same-language rows, computes support over
+  key-conditioned proposal effects, and reconstructs the minimum-norm update
+  matching the kept effects. This matches raw-coordinate `4+4` anti on the
+  one-task gate (`1/4`, `0` c2w, drop `0.057`) while operating in a less sparse
+  effect space (`~0.46` high-support fraction, mean final update Frobenius
+  `0.782`). A light version raises mean update Frobenius to `2.03` but brings
+  back `1` c2w without improving acquisition.
+- I added `--dice-support-space key_edge_effect`, which votes on effects of
+  prototype key differences `(u_a-u_b)M` rather than individual key effects.
+  It keeps the same Lyran `1/4` and `0` c2w, but drift is worse than
+  key-effect support (`0.138` vs `0.057`) and Vomar-only remains `0/4`
+  (`0` c2w, drop `0.173`, mean final Frobenius `0.586`). So first-order
+  relational key edgelets did not recover the missing payload.
+- Vomar-only controls complicate the task1 story. Strict key-effect DICE on
+  Vomar from base gets `0/4`, `0` c2w, drop `0.061`, with mean final update
+  Frobenius `0.867`. Raw relational on a Vomar-only local gate also gets `0/4`
+  and is unsafe (`2` c2w, drop `4.588`). The teacher-filtered item set is not
+  identical across these runs, but the result says Vomar's `0/4` is not clean
+  evidence that DICE is suppressing an otherwise learnable second task.
 
 Two-task teacher-filtered local gate:
 
@@ -7916,6 +7939,9 @@ Two-task teacher-filtered local gate:
 | --- | ---: | ---: | ---: | ---: | ---: |
 | raw relational | `2/4` from `1/4` baseline | `1/4` | `0/4` from `1/4` baseline | `1` | `4.585` |
 | DICE raw `4+4` anti | `1/4` from `0/4` baseline | `1/4` | `0/4` from `0/4` baseline | `0` | `0.049` |
+| DICE column `4+4` strict anti | `1/4` from `0/4` baseline | `1/4` | `0/4` from `0/4` baseline | `1` | `0.781` |
+| DICE key-effect `4+4` anti | `1/4` from `0/4` baseline | `1/4` | `0/4` from `0/4` baseline | `0` | `0.048` |
+| DICE key-effect reverse order, Vomar then Lyran | Vomar `0/4` from `0/4` baseline | Vomar `0/4` | Lyran `1/4` from `0/4` baseline | `0` | `0.138` |
 
 Interpretation:
 
@@ -7923,13 +7949,31 @@ Interpretation:
   not acquire on this local two-task gate. It is much safer than raw, but may
   be suppressing later writes or simply failing to find enough invariant mass
   for Vomar.
+- The feature-column variant is worse in the sequential gate: it still fails
+  task1 and brings back a sentinel c2w after the second write. This is a useful
+  falsifier. Whole MLP-feature columns are too broad; the extra mass is
+  contaminated even when the one-task gate is c2w-clean.
+- Key-effect support is the cleanest DICE coordinate so far: it preserves the
+  raw-coordinate safety profile with less sparse support and does not bring
+  back c2w after the second write. But it still fails task1. This means
+  key-conditioned effects are a better semantic coordinate than raw entries or
+  columns, but the current basis/gate still does not recover enough
+  threshold-bearing mass for the second language.
+- The reverse-order run changes the diagnosis: Vomar fails even when written
+  first, while Lyran still gets `1/4` when written second, with similar DICE
+  gate statistics and no sentinel c2w. Mean final Frobenius was `0.867` for
+  first-write Vomar and `0.758` for second-write Lyran. So this is not mainly
+  an old-key-negative-style collapse of the second write. The small Vomar
+  teacher-filtered gate is a weak acquisition target for this coordinate.
 - The next refinement should preserve DICE anti-support's posture cancellation
   while recovering more threshold mass. Raw coordinate support is too sparse;
   SVD support is too conservative. The missing object is likely a structured
   support coordinate. Plain feature-column maplets are not sufficient: they
-  recover mass, but the extra mass is not reliably sentinel-safe. The next
-  plausible coordinate is row/key-conditioned maplets, target-token grouped
-  components, or ORCA-residual map components with same-format anti-support.
+  recover mass, but the extra mass is not reliably sentinel-safe. Key-effect
+  maplets are cleaner, but still only preserve a small shard. The next
+  plausible coordinate is relational key-effect edgelets, e.g. support over
+  `(u_a-u_b)M`, target-token grouped components, or ORCA-residual map
+  components with same-format anti-support.
 
 Interpretation:
 
@@ -7959,3 +8003,24 @@ dice_relational_raw_column_anti_fast
 This uses the stricter column-maplet gate. It should be treated as a diagnostic
 branch, not as the current best branch, because local results show it is less
 sentinel-stable than raw-coordinate `4+4` anti at matched `1/4` acquisition.
+
+The current best diagnostic branch is now:
+
+```text
+dice_relational_raw_key_effect_anti_fast
+```
+
+This should be compared to `dice_relational_raw_anti_fast` on the full reduced
+benchmark. The key falsifier is whether it continues to stay c2w-clean while
+remaining stuck at task1 baseline; if so, the next step is not looser gating
+but better role/effect alignment or target-token grouped maplets.
+
+I also added a diagnostic preset:
+
+```text
+dice_relational_raw_key_edge_anti_fast
+```
+
+The local result says this is not the new frontier: it is safe but more
+conservative than key-effect and does not fix Vomar. It is useful mainly as a
+negative test for naive relational key-effect edgelets.
