@@ -1,4 +1,4 @@
-# Request For GPT-5.5 Pro: One-Pass Surprise Consolidation After DICE Unsafe-Write Follow-Up
+# Request For GPT-5.5 Pro: Global Coherence Energy For One-Pass Weight Updates
 
 Date: 2026-05-23
 
@@ -9,11 +9,185 @@ Audience: GPT-5.5 Pro. I am giving you two files:
 2. This file: the current prompt/request. Please read the full research log
    first, then answer this prompt.
 
+## 2026-05-23 Current Ask: Turn Global Working-Memory Coherence Into A Weight Update
+
+Please treat this section as the current live request. The full research log is
+attached separately; older DICE, TDMI-Q, TRACE-Q, PRISM-Q, SEAL-Q, and
+purifier sections below are retained for continuity.
+
+The new hypothesis is:
+
+\[
+\boxed{
+\text{the thing to learn is not a feature, not even an isolated relation, but a
+conditional deformation of the whole currently instantiated world-state.}
+}
+\]
+
+Working memory is the model temporarily configuring its world model as if many
+constraints were true at once. Learning should happen when this instantiated
+state exposes a coherence failure: under the old weights, the whole state does
+not settle cleanly. A purple giraffe is not surprising because "purple" fires
+or because "giraffe" fires. It is surprising because ordinary street context,
+animal identity, visual realism, causal expectation, and the purple-giraffe
+conjunction do not jointly cohere under the current model.
+
+So the desired update is not:
+
+- write the active feature;
+- write a feature delta;
+- write a pairwise binding;
+- write local relation surprise;
+- write answer/readout movement;
+- write a local logit-safety filtered target.
+
+The desired update is closer to:
+
+\[
+\boxed{
+\text{find the minimal weight update that makes the entire instantiated
+context-state more self-consistent under the model, while not globally lowering
+the energy of generic answer/posture/default states.}
+}
+\]
+
+In the dog-in-room analogy, the model should not learn "dogs are likely" or
+even naked "dog in room." It should learn that this particular room/world-state,
+with this dog-shaped unexpected object in this relational position, is less
+impossible than before. In the mini-language benchmark, the model should not
+learn "translation mode." It should learn that this particular latent language
+system makes the rule/example/use context cohere.
+
+### Why This Explains The Failures
+
+The research pattern fits this theory:
+
+- safe-but-inert methods detect purified local surprise without writing the
+  full coherence deformation;
+- acquiring-but-unsafe methods write a real chunk of the coherence deformation,
+  but include generic posture/task/readout state;
+- local output filters fail because useful coherence updates must eventually
+  touch readout, and harmfulness is a downstream/global property, not a local
+  vector property;
+- old-key protection suppresses new learning because it protects coordinates,
+  not state coherence;
+- raw DICE over diverse contexts is safety-relevant, but raw weight-coordinate
+  agreement deletes the threshold component because the true object is not
+  linearly aligned in raw entries.
+
+The latest first probe, `wm_coherence`, was a row-level graph reweighting method:
+
+- current graph nodes: same-pass residual outputs at selected relational rows;
+- target graph nodes: outputs plus context-value targets;
+- candidate graph nodes: outputs plus proposed update effects;
+- row score: reduction in pairwise cosine-graph error, with a low-surprise
+  default-state penalty.
+
+It acquired task0 and was c2w-clean after task0, but failed sequentially:
+
+| Preset | Task0 after task0 | c2w after task0 | Task0 after task1 | Task1 after task1 | c2w after task1 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `wm_coherence_fast` | `2/4` | `0` | `2/4` | `0/4` | `4` |
+| `wm_coherence_strict_fast` | `2/4` | `0` | `2/4` | `0/4` | `4` |
+
+Interpretation: row-level graph trust is still a reweighted unsafe actuator. It
+is not the global coherence-energy update.
+
+### Hard Constraints
+
+Please satisfy all constraints:
+
+1. One lesson/context pass only for the write.
+2. No labels, no null prompts, no sentinels, no held-out eval questions, no
+   probes generated outside the write context.
+3. Closed-form bounded linear algebra; no optimizer loop.
+4. No runtime router, retrieval, adapter selection, or task ID.
+5. Sequential benchmark must pass only updated weights between tasks. There can
+   be no old-key bank, old transform memory, Fisher sidecar, stored contexts,
+   harness state, or external protection object available to the next write.
+6. Diagnostic ablations may use forbidden objects, but the proposed final
+   mechanism cannot.
+7. The target benchmark is the two-task learning + sentinel benchmark, not
+   single-task accuracy.
+
+### What I Want You To Figure Out
+
+Please propose the next implementable mathematical tool that turns the global
+coherence idea into a weight update.
+
+The likely direction is a **map-level or trajectory-level coherence-energy
+solve**, not another scalar row trust. A sketch of the kind of object I mean:
+
+\[
+E_{\text{obj}}(M)
+=
+\left\|
+\mathcal{G}
+\left(h_i + k_iM,\;h_j+k_jM\right)
+-
+\mathcal{G}^{\star}_{ij}
+\right\|^2,
+\]
+
+where:
+
+- \(h_i\) are same-pass residual/working-memory states;
+- \(k_iM\) are proposed MLP-down effects;
+- \(\mathcal{G}\) is a graph/coherence statistic over tokens/layers/relations;
+- \(\mathcal{G}^{\star}\) is the target settled graph inferred from the same
+  context, not from labels;
+- default/posture energy is penalized by preserving low-surprise/default state
+  graphs.
+
+But please do not just accept this sketch. Improve or replace it if needed.
+
+Answer in implementable detail:
+
+1. What is the right state graph or coherence statistic?
+   - pairwise cosine graph?
+   - relation field?
+   - cross-layer transport graph?
+   - attention-mediated consistency graph?
+   - predictive coding residual between rule/example/use tokens?
+
+2. How do we infer the target settled/coherent graph from one forward pass
+   without copying posture?
+
+3. What is the exact closed-form objective for the update \(M\)?
+   - Include shapes.
+   - Include linearization if needed.
+   - Include how to keep it computationally tractable.
+
+4. How should generic/default/posture states be preserved under the no-sidecar
+   sequential constraint?
+   - The next task only sees current weights and its new context.
+   - No stored old examples or old subspaces.
+
+5. How does this differ from failed row-level `wm_coherence`, TRACE-local,
+   TDMI-Q, Q-RICO, CORI, and DICE?
+
+6. What first fast reduced-fixture experiments should I run?
+   - Include exact pass bars.
+   - Include ablations that distinguish "real global coherence update" from
+     "smaller unsafe relational write."
+
+7. What are the falsification criteria?
+
+The core challenge:
+
+\[
+\boxed{
+\text{make this particular instantiated world-state lower energy without
+making generic answer/posture/default states lower energy.}
+}
+\]
+
+Please focus on solving that.
+
 ## 2026-05-23 Update: DICE On Unsafe Learning-Causing Writes
 
-Please treat this update as the current live state. The full research log is
-attached separately; older DICE, TDMI-Q, TRACE-Q, PRISM-Q, and SEAL-Q sections
-below are retained for continuity.
+This older section is retained for continuity. The current live request is the
+global working-memory coherence ask above.
 
 Hard constraint reminder: the sequential benchmark must pass only updated
 weights between tasks. There can be no old-key bank, old transform memory,
