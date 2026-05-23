@@ -7866,6 +7866,8 @@ Local one-task teacher-filtered gate:
 | DICE raw, `8` diverse contexts | `1/4` | `4/4` | `1/4` | `1` | `0.460` |
 | DICE raw, `4` diverse + `4` rival-language anti contexts | `0/4` | `4/4` | `1/4` | `0` | `0.056` |
 | DICE raw, `4+4` anti, SVD support space | `0/4` | `4/4` | `0/4` | `0` | `0.013` |
+| DICE raw, `4+4` anti, column support | `0/4` | `4/4` | `1/4` | `1` | `0.655` |
+| DICE raw, `4+4` anti, strict column support | `0/4` | `4/4` | `1/4` | `0` | `0.423` |
 | DICE raw, `4+4` anti, scale `.15` | `0/4` | `4/4` | `1/4` | `0` | `0.081` |
 | DICE raw, `4+4` anti, scale `.25` | `0/4` | `4/4` | `1/4` | `0` | `0.130` |
 | DICE raw, `4+4` anti, loose support | `0/4` | `4/4` | `1/4` | `0` | `0.077` |
@@ -7899,6 +7901,14 @@ Additional local conclusions:
 - Increasing to `8+8` contexts was safe but more conservative than `4+4`: it
   stayed at baseline and reduced final update Frobenius (`0.49` vs `0.80`).
   More contexts are not automatically better under raw-coordinate support.
+- I added `--dice-support-space column`, which computes support over each MLP
+  feature column's full value-vector update instead of over individual raw
+  entries. This passes more structured mass: relaxed column support had mean
+  final update Frobenius `1.340` and kept `1/4`, but reintroduced `1` c2w.
+  Tightening support/anti-support recovered `0` c2w and `1/4`, with final
+  update Frobenius around `0.857` and before-correct drop `0.423`. That is
+  safer than the relaxed column run, but still worse than raw-coordinate
+  `4+4` anti on sentinel margin drift (`0.056`).
 
 Two-task teacher-filtered local gate:
 
@@ -7916,7 +7926,9 @@ Interpretation:
 - The next refinement should preserve DICE anti-support's posture cancellation
   while recovering more threshold mass. Raw coordinate support is too sparse;
   SVD support is too conservative. The missing object is likely a structured
-  support coordinate: row/key-conditioned maplets, target-token grouped
+  support coordinate. Plain feature-column maplets are not sufficient: they
+  recover mass, but the extra mass is not reliably sentinel-safe. The next
+  plausible coordinate is row/key-conditioned maplets, target-token grouped
   components, or ORCA-residual map components with same-format anti-support.
 
 Interpretation:
@@ -7937,3 +7949,13 @@ dice_relational_raw_anti_fast
 Next experiment should be the CUDA/Modal-style two-task reduced benchmark for
 `dice_relational_raw_anti_fast`, compared against raw, Q-RICO, and DICE raw
 without anti-support. If it scales, this is a stronger path than TAG-CE v1.
+
+I also added a diagnostic preset:
+
+```text
+dice_relational_raw_column_anti_fast
+```
+
+This uses the stricter column-maplet gate. It should be treated as a diagnostic
+branch, not as the current best branch, because local results show it is less
+sentinel-stable than raw-coordinate `4+4` anti at matched `1/4` acquisition.

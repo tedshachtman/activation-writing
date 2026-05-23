@@ -168,7 +168,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--intrinsic-surprise-birth-trigger-ridge", type=float, default=1e-3)
     parser.add_argument("--write-only-final", action="store_true")
     parser.add_argument("--dice-defer-apply", action="store_true")
-    parser.add_argument("--dice-support-space", choices=["coordinate", "svd"], default="coordinate")
+    parser.add_argument("--dice-support-space", choices=["coordinate", "column", "svd"], default="coordinate")
     parser.add_argument("--dice-subspace-rank", type=int, default=8)
     parser.add_argument("--dice-support-threshold", type=float, default=0.75)
     parser.add_argument("--dice-support-temperature", type=float, default=16.0)

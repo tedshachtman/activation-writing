@@ -1639,10 +1639,10 @@ def dice_support_consensus_update(
     """High-support consensus across diverse contexts.
 
     DICE is intentionally stricter than the older mean/directional ensembles:
-    each coordinate or shared proposal mode is kept only when its sign recurs
-    across many independently rendered contexts. The goal is to preserve
-    invariants shared across diverse contexts while suppressing context-local
-    surface posture.
+    each coordinate, feature-column maplet, or shared proposal mode is kept
+    only when it recurs across many independently rendered contexts. The goal
+    is to preserve invariants shared across diverse contexts while suppressing
+    context-local surface posture.
     """
 
     if not updates:
@@ -1683,6 +1683,23 @@ def dice_support_consensus_update(
             anti_stack = anti_flat.reshape(anti_flat.shape[0], *stack.shape[1:])
             common_sign = torch.sign(mean_update)
             anti_same = ((torch.sign(anti_stack) == common_sign.unsqueeze(0)) & (common_sign.unsqueeze(0) != 0)).float().mean(dim=0)
+        else:
+            anti_same = torch.zeros_like(support)
+    elif support_space == "column":
+        mean_update = stack.mean(dim=0)
+        mean_col_norm = torch.linalg.vector_norm(mean_update, dim=0).clamp_min(1e-12)
+        mean_dir = mean_update / mean_col_norm.unsqueeze(0)
+        ctx_col_norm = torch.linalg.vector_norm(stack, dim=1).clamp_min(1e-12)
+        ctx_cos = (stack * mean_dir.unsqueeze(0)).sum(dim=1) / ctx_col_norm
+        support = ctx_cos.clamp_min(0.0).mean(dim=0)
+        reconstruction_basis = None
+        mean_coeff = None
+        actual_rank = mean_update.shape[1]
+        if anti_flat.numel() > 0:
+            anti_stack = anti_flat.reshape(anti_flat.shape[0], *stack.shape[1:])
+            anti_col_norm = torch.linalg.vector_norm(anti_stack, dim=1).clamp_min(1e-12)
+            anti_cos = (anti_stack * mean_dir.unsqueeze(0)).sum(dim=1) / anti_col_norm
+            anti_same = anti_cos.clamp_min(0.0).mean(dim=0)
         else:
             anti_same = torch.zeros_like(support)
     elif support_space == "svd":
@@ -1728,6 +1745,10 @@ def dice_support_consensus_update(
         assert reconstruction_basis is None
         final_update = mean_update * gate
         mean_map_fro = torch.linalg.vector_norm(mean_update)
+    elif support_space == "column":
+        assert reconstruction_basis is None
+        final_update = mean_update * gate.unsqueeze(0)
+        mean_map_fro = torch.linalg.vector_norm(mean_update)
     else:
         assert reconstruction_basis is not None and mean_coeff is not None
         final_flat = (mean_coeff * gate) @ reconstruction_basis
@@ -1739,6 +1760,7 @@ def dice_support_consensus_update(
         "dice_context_count": float(len(updates)),
         "dice_anti_context_count": float(len(anti_updates)),
         "dice_support_space_is_svd": 1.0 if support_space == "svd" else 0.0,
+        "dice_support_space_is_column": 1.0 if support_space == "column" else 0.0,
         "dice_subspace_rank": float(actual_rank),
         "dice_subspace_energy_fraction": float(mode_energy_fraction),
         "dice_support_threshold": threshold,
@@ -2773,7 +2795,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ensemble-directional-min-agreement", type=float, default=0.0)
     parser.add_argument("--ensemble-subspace-rank", type=int, default=2)
     parser.add_argument("--dice-defer-apply", action="store_true")
-    parser.add_argument("--dice-support-space", choices=["coordinate", "svd"], default="coordinate")
+    parser.add_argument("--dice-support-space", choices=["coordinate", "column", "svd"], default="coordinate")
     parser.add_argument("--dice-subspace-rank", type=int, default=8)
     parser.add_argument("--dice-support-threshold", type=float, default=0.75)
     parser.add_argument("--dice-support-temperature", type=float, default=16.0)

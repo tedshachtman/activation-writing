@@ -240,6 +240,10 @@ around the unsafe direct `relational_aggregate` context-value write, plus ORCA
 - `dice_relational_raw_fast`: 12 diverse contexts, support threshold `.80`.
 - `dice_relational_raw_strict_fast`: 12 diverse contexts, threshold `.875`.
 - `dice_relational_raw_screen_fast`: 6 diverse contexts, threshold `.67`.
+- `dice_relational_raw_anti_fast`: 4 diverse contexts plus 4 same-format
+  rival-language anti-support contexts.
+- `dice_relational_raw_column_anti_fast`: stricter feature-column support with
+  the same 4+4 anti-support setup.
 - `dice_orca_residual_fast`: 12-context DICE around ORCA `residual_only`.
 - `dice_orca_residual_screen_fast`: 4-context DICE around ORCA
   `residual_only`.
@@ -3037,6 +3041,8 @@ current write only; no sidecar state is available between future tasks.
 | DICE raw, `8` diverse contexts | `1/4` | `4/4` | `1/4` | `1` | `0.460` |
 | DICE raw, `4` diverse + `4` rival-language anti contexts | `0/4` | `4/4` | `1/4` | `0` | `0.056` |
 | DICE raw, `4+4` anti, SVD support space | `0/4` | `4/4` | `0/4` | `0` | `0.013` |
+| DICE raw, `4+4` anti, column support | `0/4` | `4/4` | `1/4` | `1` | `0.655` |
+| DICE raw, `4+4` anti, strict column support | `0/4` | `4/4` | `1/4` | `0` | `0.423` |
 | DICE raw, `4+4` anti, scale `.25` | `0/4` | `4/4` | `1/4` | `0` | `0.130` |
 | DICE raw, `4+4` anti, loose support | `0/4` | `4/4` | `1/4` | `0` | `0.077` |
 | DICE raw, `8+8` anti | `1/4` | `4/4` | `1/4` | `0` | `0.045` |
@@ -3058,6 +3064,11 @@ Follow-up local findings:
   acquisition beyond `1/4`.
 - Loosening support threshold keeps safety but does not improve acquisition.
 - `8+8` anti-support is also safe but more conservative than `4+4`.
+- I added `--dice-support-space column`, which computes support over each
+  MLP feature column's whole value-vector update. Relaxed column support
+  passes more mass and keeps `1/4`, but reintroduces `1` c2w. A stricter
+  column gate recovers `0` c2w and keeps `1/4`, but before-correct drop rises
+  to `0.423`, much worse than raw-coordinate `4+4` anti's `0.056`.
 
 Two-task teacher-filtered local gate:
 
@@ -3070,7 +3081,8 @@ So DICE anti-support is very safe and retains task0, but still fails to acquire
 task1 on this small local sequential gate. It is not the full solution yet.
 The next refinement needs to recover more threshold-bearing mass while keeping
 anti-support's posture cancellation. Raw coordinate support is too sparse; SVD
-support is too blunt/conservative.
+support is too blunt/conservative; plain feature-column maplets recover more
+mass but are not clean enough.
 
 I added a full reduced-benchmark preset:
 
@@ -3106,4 +3118,8 @@ Specifically, propose the next implementable refinement around:
 Promising coordinates to consider: key-conditioned row/maplet support,
 target-token grouped support, ORCA-residual components with anti-support, or a
 closed-form quotient that subtracts rival-language common posture from the
-direct relational map without collapsing to a tiny coordinate gate.
+direct relational map without collapsing to a tiny coordinate gate. Plain
+feature-column support was just tested and is not enough by itself: relaxed
+column support reacquired c2w, while strict column support was safe but had much
+higher sentinel margin drift than raw-coordinate anti-support at the same
+`1/4` acquisition.
