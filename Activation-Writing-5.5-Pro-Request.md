@@ -3088,3 +3088,32 @@ Please treat the next proposal as needing to be cheap enough for the
    computed from the same pass/current weights; or
 2. a weight-only consolidation mark/protection mechanism that does not distort
    future surprise coordinates like gauge-scale sealing did.
+
+## Postscript 12: Latest DICE Split-Finding Note
+
+Later work shifted the live direction back to DICE-style diverse invariant
+context ensembles applied to unsafe acquisition-bearing relational writes. This
+postscript records the latest practical update.
+
+I added split-screening tools so future DICE variants are tested on splits where
+the unsafe base write actually acquires:
+
+```text
+scripts/screen_minilang_splits.py
+scripts/screen_raw_minilang_splits.py
+```
+
+Context-only screening is insufficient. Lyran seed 2 was fully context-solvable
+(`0/4` baseline, `4/4` full-context, `11/20` teacher-correct), but raw
+relational stayed `0/4` after writing while badly damaging sentinel margins:
+
+```text
+edited 0/4, c2w 0, before-correct drop 3.182, max drop 9.576
+```
+
+Lyran seed 3 also had `1/4 -> 4/4` baseline/context but raw relational fell to
+`0/4` with before-correct drop `2.871` and max drop `6.567`.
+
+So the next DICE loop should use the raw-write screener, not just context
+upper-bound screening. A safe DICE `0/4` result is only informative when the
+same split has an unsafe raw-write acquisition payload to purify.

@@ -3177,3 +3177,37 @@ first key-effect only learns a small shard, key-edge is weaker, and naive
 target grouping is either unsafe/inert or safe/inert. The next question is how
 to align effects across contexts more semantically than pooled selected-key
 SVD, prototype key differences, or target-vector clusters.
+
+## Postscript 14: Split-Finding Tooling Added
+
+I added two helper scripts:
+
+```text
+scripts/screen_minilang_splits.py
+scripts/screen_raw_minilang_splits.py
+```
+
+The first loads the model once and scans task/seed pairs for baseline versus
+full-context performance. The second launches the existing continual runner
+with the unsafe raw relational context-value write and summarizes before-write,
+after-write, and sentinel metrics into a JSONL file.
+
+This was necessary because context-only screens are not enough. Lyran seed 2
+looked good before writing (`0/4` baseline, `4/4` full-context,
+`11/20` teacher-correct), but raw relational stayed `0/4` after the write while
+damaging sentinel margins badly:
+
+```text
+runs/relational_raw_lyran_seed2_teacher_gate_mps_layers7
+edited 0/4, c2w 0, before-correct drop 3.182, max drop 9.576
+```
+
+Lyran seed 3 behaved similarly:
+
+```text
+baseline/context 1/4 -> 4/4, edited 0/4, c2w 0, before-correct drop 2.871, max drop 6.567
+```
+
+So future DICE-coordinate comparisons should first find splits where the unsafe
+base write actually acquires. A safe DICE `0/4` result is only meaningful when
+the same split has a real raw-write payload to purify.

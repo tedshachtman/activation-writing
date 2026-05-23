@@ -389,6 +389,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--old-task-negative-max-rows", type=int, default=256)
     parser.add_argument("--old-task-negative-scale", type=float, default=1.0)
+    parser.add_argument(
+        "--screen-before-write-only",
+        action="store_true",
+        help="Stop after teacher filtering and before-write baseline/context scoring.",
+    )
     return parser.parse_args()
 
 
@@ -619,6 +624,18 @@ def main() -> None:
         for stage, metrics in (("baseline", baseline), ("context", context)):
             for idx, detail in enumerate(metrics["details"]):
                 append_jsonl(details_path, {"stage": stage, "step": -1, "task_idx": task_idx, "idx": idx, **detail})
+
+    if args.screen_before_write_only:
+        progress("screen-before-write-only requested; stopping before writes")
+        append_jsonl(
+            metrics_path,
+            {
+                "stage": "screen_complete",
+                "step": -1,
+                "seconds": time.time() - started,
+            },
+        )
+        return
 
     acquisition_accuracy: list[float | None] = [None for _ in profiles]
     acquisition_margin: list[float | None] = [None for _ in profiles]

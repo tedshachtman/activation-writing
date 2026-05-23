@@ -8057,3 +8057,55 @@ dice_relational_raw_target_group_anti_fast
 The local result is negative. Target grouping is not the missing semantic
 coordinate in its current form: high rank is unsafe and inert; low rank is safe
 and inert.
+
+### Split-Finding Tooling For Future DICE Work
+
+I added two lightweight screeners because the current four-item local gates are
+too brittle for DICE-coordinate comparisons:
+
+```text
+scripts/screen_minilang_splits.py
+scripts/screen_raw_minilang_splits.py
+```
+
+`screen_minilang_splits.py` loads the model once and scans task/seed pairs for
+baseline versus full-context performance. This is useful for finding
+teacher-filtered context-solvable splits, but it is not enough. I also added
+`--screen-before-write-only` to `scripts/minilang_intrinsic_continual.py` so
+the continual harness can stop after teacher filtering and before-write
+baseline/context scoring.
+
+The first scan showed the limitation:
+
+| Split | Baseline | Context | Teacher-correct | Note |
+| --- | ---: | ---: | ---: | --- |
+| Lyran seed 1 | `1/4` | `4/4` | `15/20` | known acquisition-informative raw split |
+| Lyran seed 2 | `0/4` | `4/4` | `11/20` | looked promising before write |
+
+Raw relational follow-up on the promising Lyran seed 2 split:
+
+```text
+runs/relational_raw_lyran_seed2_teacher_gate_mps_layers7
+```
+
+Result:
+
+| Split | Baseline | Context | Edited | c2w | before-correct drop | max drop |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Lyran seed 2, raw relational | `0/4` | `4/4` | `0/4` | `0` | `3.182` | `9.576` |
+| Lyran seed 3, raw relational | `1/4` | `4/4` | `0/4` | `0` | `2.871` | `6.567` |
+
+So a split can be fully solved in context and still not cross any closed-book
+item after the unsafe raw relational write, while still damaging sentinel
+margins badly. Context-only screening is therefore insufficient for the next
+DICE loop.
+
+`screen_raw_minilang_splits.py` launches the existing continual runner once per
+task/seed split with the unsafe raw relational context-value write, then writes
+a compact JSONL summary containing before-write baseline/context scores,
+after-write edited score, sentinel c2w, and sentinel margin drops.
+
+Next practical step: use `screen_raw_minilang_splits.py` to find splits where
+the unsafe base write actually acquires before spending time on DICE variants.
+For DICE research, a safe `0/4` variant is only informative when the same split
+has an unsafe raw-write payload to remove.
