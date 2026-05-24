@@ -3321,3 +3321,76 @@ Hard constraints remain unchanged:
 - contexts used for DICE-style write construction are allowed inside the
   current write, but nothing about them may survive except through weights;
 - primary target is two-task acquisition/retention plus sentinel preservation.
+
+## Postscript 16: Associative DICE Anti-Support Tried
+
+We tested the user's obvious next question: apply DICE anti-support to one of
+the older high-acquisition carriers, not just Q-RICO or direct relational.
+
+I added presets:
+
+```text
+assoc_layer20_raw_eval20
+dice_assoc_layer20_anti_eval20
+```
+
+The carrier was the old layer-20 final-aligned associative/effective family:
+
+```text
+target_mode associative_binding
+token_mode final_aligned
+target_scale .50
+layer 20
+input/output protection 256/20 and 256/10
+```
+
+Current harness raw result:
+
+| Run | Baseline | Context | Edited | expanded c2w | before-correct drop | max drop |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| associative layer20 raw | `2/20` | `20/20` | `4/20` | `3` | `3.166` | `11.906` |
+
+This did not reproduce the historical `10-12/20` acquisition. It is still an
+unsafe acquisition-bearing carrier, but weaker in the current harness/eval set.
+
+Then `4+4` DICE anti-support:
+
+| Run | Baseline | Context | Edited | expanded c2w | before-correct drop | max drop |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| associative DICE `4+4` anti | `1/20` | `20/20` | `1/20` | `0` | `0.025` | `0.131` |
+
+Diagnostics:
+
+```text
+dice_gate_mean          0.00046
+dice_high_support_frac  0.00375
+dice_anti_gate_mean     0.987
+mean proposal Fro       42.62
+final update Fro        2.86
+```
+
+Because DICE diverse contexts alter the full-context teacher filter, the raw
+and DICE runs selected different 20-question subsets. They overlapped on 8
+questions:
+
+```text
+associative raw overlap:       0/8 -> 2/8
+associative DICE anti overlap: 0/8 -> 0/8
+```
+
+Interpretation:
+
+```text
+DICE anti-support remains an excellent safety brake.
+Raw coordinate DICE still removes too much threshold payload.
+```
+
+This experiment obeys the no-sidecar constraint in the intended sense. The
+extra same-language/rival contexts are used only during the current write
+construction; after the write, no support gate, context bank, old-key memory,
+or other state survives except through model weights.
+
+Please treat this as another argument against raw-coordinate DICE. If DICE is
+still the right family, the support/anti-support coordinate must be upgraded to
+a functional maplet/role-aligned coordinate that preserves more of the
+acquisition-bearing update while subtracting same-format rival posture.

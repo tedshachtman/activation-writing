@@ -3223,3 +3223,59 @@ Candidate directions:
 Please be blunt. If CAGE v1 should be abandoned, say so and explain the next
 better coordinate. If it should be repaired, give a concrete closed-form update
 and the first three cheap experiments.
+
+## Postscript 14: Associative DICE Anti-Support Result
+
+We also tried DICE anti-support on the older high-acquisition associative
+carrier.
+
+Carrier:
+
+```text
+target_mode associative_binding
+token_mode final_aligned
+target_scale .50
+layer 20
+input/output protection 256/20 and 256/10
+```
+
+Raw current-harness result:
+
+```text
+baseline 2/20, context 20/20, edited 4/20,
+expanded c2w 3, before-correct drop 3.166, max drop 11.906
+```
+
+So this did not reproduce the historical `10-12/20`, but it is still an unsafe
+acquisition-bearing carrier.
+
+`4+4` same-language/rival DICE anti-support result:
+
+```text
+baseline 1/20, context 20/20, edited 1/20,
+expanded c2w 0, before-correct drop 0.025, max drop 0.131
+dice_gate_mean 0.00046
+dice_high_support_frac 0.00375
+mean proposal Fro 42.62 -> final Fro 2.86
+```
+
+The raw and DICE runs selected different teacher-filtered question subsets
+because DICE diverse contexts change the full-context teacher filter. On their
+8 overlapping questions:
+
+```text
+raw associative:       0/8 -> 2/8
+DICE associative anti: 0/8 -> 0/8
+```
+
+Conclusion:
+
+```text
+DICE anti-support is still an excellent safety brake,
+but raw-coordinate support deletes too much threshold-bearing payload even
+on the associative carrier.
+```
+
+The no-sidecar constraint is still satisfied in the intended sense: the extra
+contexts are used only during the current write construction, then discarded.
+No support gate/context bank/old-key memory is passed to the next task.

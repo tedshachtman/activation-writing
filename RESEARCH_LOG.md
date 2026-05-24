@@ -8224,3 +8224,85 @@ anchor alone is not enough. If CAGE remains interesting, the row/value nuisance
 coordinate needs to be learned from DICE-style rival support or from actual
 sentinel-correlated damage diagnostics, not from the current generic graph
 posture basis alone.
+
+### DICE Anti-Support On The Associative Carrier
+
+The user asked whether we had actually tried DICE anti-support on the older
+high-acquisition families. We had tried it on Q-RICO and direct relational
+context-value, and attempted ORCA residual-only before hitting runtime, but we
+had not tried the layer-20 final-aligned associative/effective carrier that
+previously reached `10-12/20`.
+
+I added repeatable grid presets:
+
+```text
+assoc_layer20_raw_eval20
+dice_assoc_layer20_anti_eval20
+```
+
+First, I reran the associative carrier in the current continual harness on the
+20-question teacher-filtered Lyran gate:
+
+```text
+runs/assoc_raw_task0_seed1_candidates80_eval20
+```
+
+Result:
+
+| Run | Baseline | Context | Edited | expanded c2w | before-correct drop | max drop |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| associative layer20 raw | `2/20` | `20/20` | `4/20` | `3` | `3.166` | `11.906` |
+
+This did not reproduce the older `10-12/20` result in the current harness. It
+is still an unsafe acquisition-bearing carrier, but weaker than the historical
+run. The likely causes are harness drift and a different teacher-filtered eval
+set; the old run had base `0/20`, while this one has base `2/20`.
+
+Then I ran `4+4` DICE anti-support around the same associative carrier:
+
+```text
+runs/assoc_dice_anti_task0_seed1_candidates80_eval20
+```
+
+Result:
+
+| Run | Baseline | Context | Edited | expanded c2w | before-correct drop | max drop |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| associative DICE `4+4` anti | `1/20` | `20/20` | `1/20` | `0` | `0.025` | `0.131` |
+
+DICE diagnostics:
+
+```text
+dice_context_count        4
+dice_anti_context_count   4
+dice_gate_mean            0.00046
+dice_high_support_frac    0.00375
+dice_anti_gate_mean       0.987
+dice_mean_update_fro      42.62
+dice_final_update_fro     2.86
+```
+
+The DICE run used a different teacher-filtered question subset because the
+DICE diverse-context rendering changes the full-context teacher filter. The
+two 20-question sets overlap on 8 questions. On the overlap:
+
+| Run | Baseline | Context | Edited |
+| --- | ---: | ---: | ---: |
+| associative raw, overlap | `0/8` | `8/8` | `2/8` |
+| associative DICE anti, overlap | `0/8` | `8/8` | `0/8` |
+
+Interpretation:
+
+- DICE anti-support behaves the same on associative as it did on raw
+  relational: it is an extremely effective safety brake.
+- It does not preserve the threshold-bearing payload in the current coordinate.
+  The final DICE update Frobenius fell from mean proposal `42.62` to `2.86`,
+  and acquisition collapsed to baseline.
+- This is not evidence that DICE cannot work. It is evidence that raw
+  coordinate support/anti-support is too strict even for the associative
+  carrier. The next DICE move must be a richer functional/maplet coordinate,
+  not more scalar threshold tuning.
+- The experiment satisfies the no-sidecar constraint in the relevant sense:
+  diverse and rival contexts are used only during the current write
+  construction, then discarded. The next task/session would receive only the
+  updated weights.
