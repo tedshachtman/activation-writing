@@ -211,6 +211,21 @@ class TagCeResult:
 
 
 @dataclass
+class CageCeResult:
+    """CAGE candidate-anchored graph-energy update plus diagnostics.
+
+    ``update`` is row-major MLP down delta, shaped ``[d_model, d_ff]``. CAGE
+    keeps an acquisition-bearing candidate map and applies a closed-form
+    proximal row-space correction so object graph functionals move toward a
+    Schur-residualized coherence target while ambient/default graph
+    functionals stay near zero.
+    """
+
+    update: torch.Tensor
+    diagnostics: dict[str, float]
+
+
+@dataclass
 class OcepPurificationResult:
     """OCEP-purified update plus diagnostics.
 
@@ -4884,6 +4899,334 @@ def tag_ce_purify_update(
         }
     )
     return TagCeResult(update=update_out.contiguous(), diagnostics=diagnostics)
+
+
+def _cage_schur_residualize_target(
+    target: torch.Tensor,
+    functional_rows: torch.Tensor,
+    generic_key_basis: torch.Tensor,
+    posture_basis: torch.Tensor,
+    *,
+    eps: float = 1e-6,
+) -> tuple[torch.Tensor, float, int, int]:
+    """Remove generic-row x posture-value product fields from a target block."""
+
+    t = torch.nan_to_num(target.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    a = torch.nan_to_num(functional_rows.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    g = torch.nan_to_num(generic_key_basis.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    p = torch.nan_to_num(posture_basis.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    if t.numel() == 0 or a.numel() == 0 or p.numel() == 0:
+        return t.contiguous(), 0.0, 0, int(p.shape[0]) if p.ndim == 2 else 0
+    row_parts: list[torch.Tensor] = []
+    ones = torch.ones(a.shape[0], 1, dtype=torch.float32)
+    row_parts.append(ones / ones.norm().clamp_min(float(eps)))
+    if g.ndim == 2 and g.numel() > 0 and g.shape[1] == a.shape[1]:
+        row_parts.append(a @ g.T)
+    row_mat = torch.cat([part for part in row_parts if part.numel() > 0], dim=1)
+    row_mat = torch.nan_to_num(row_mat, nan=0.0, posinf=0.0, neginf=0.0)
+    if float(torch.linalg.vector_norm(row_mat).item()) <= float(eps):
+        return t.contiguous(), 0.0, 0, int(p.shape[0])
+    row_q, _r = torch.linalg.qr(row_mat, mode="reduced")
+    if p.ndim != 2 or p.shape[1] != t.shape[1]:
+        return t.contiguous(), 0.0, int(row_q.shape[1]), 0
+    coeff = t @ p.T
+    absorbed_coeff = row_q @ (row_q.T @ coeff)
+    absorbed = absorbed_coeff @ p
+    absorbed_ratio = (
+        torch.linalg.vector_norm(absorbed).square()
+        / torch.linalg.vector_norm(t).square().clamp_min(float(eps))
+    )
+    return (t - absorbed).contiguous(), float(absorbed_ratio.item()), int(row_q.shape[1]), int(p.shape[0])
+
+
+def _cage_proximal_rowspace_correction(
+    candidate_map: torch.Tensor,
+    rows: torch.Tensor,
+    targets: torch.Tensor,
+    *,
+    ridge: float,
+    correction_cap: float,
+    eps: float = 1e-6,
+) -> tuple[torch.Tensor, float, float]:
+    """Solve ``min_Z ridge||Z||^2 + ||A(M0+Z)-Y||^2`` in row space."""
+
+    m0 = torch.nan_to_num(candidate_map.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    a = torch.nan_to_num(rows.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    y = torch.nan_to_num(targets.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    if a.numel() == 0 or y.numel() == 0 or a.shape[0] != y.shape[0]:
+        return m0.contiguous(), 0.0, 0.0
+    residual = y - a @ m0
+    system = a @ a.T + max(float(ridge), float(eps)) * torch.eye(a.shape[0], dtype=torch.float32)
+    coeff = _solve_symmetric_psd(system, residual)
+    correction = a.T @ coeff
+    raw_norm = float(torch.linalg.vector_norm(correction).item())
+    m0_norm = torch.linalg.vector_norm(m0).clamp_min(float(eps))
+    cap = max(float(correction_cap), 0.0) * float(m0_norm.item())
+    if cap > 0.0 and raw_norm > cap:
+        correction = correction * (cap / max(raw_norm, float(eps)))
+    elif cap == 0.0:
+        correction = torch.zeros_like(correction)
+    return (m0 + correction).contiguous(), raw_norm, float(torch.linalg.vector_norm(correction).item())
+
+
+def cage_ce_purify_update(
+    update: torch.Tensor,
+    *,
+    keys: torch.Tensor,
+    targets: torch.Tensor,
+    weights: torch.Tensor,
+    all_keys: torch.Tensor,
+    all_outputs: torch.Tensor,
+    token_indices: torch.Tensor,
+    layer: nn.Module | None = None,
+    negative_keys: torch.Tensor | None = None,
+    output_basis: torch.Tensor | None = None,
+    max_object_nodes: int = 96,
+    max_ambient_nodes: int = 96,
+    max_object_edges: int = 192,
+    max_ambient_edges: int = 192,
+    edge_smooth_alpha: float = 0.35,
+    edge_sim_top_k: int = 8,
+    posture_rank: int = 32,
+    ambient_key_rank: int = 16,
+    edge_weight: float = 1.0,
+    centroid_weight: float = 0.35,
+    lowfreq_weight: float = 0.50,
+    lowfreq_rank: int = 4,
+    ambient_weight: float = 2.0,
+    negative_weight: float = 20.0,
+    schur_ridge: float = 1e-3,
+    prox_ridge: float = 0.25,
+    correction_cap: float = 0.35,
+    disable_schur: bool = False,
+    disable_graph_settle: bool = False,
+    disable_lowfreq: bool = False,
+    shuffle_graph: bool = False,
+    low_surprise_quantile: float = 0.35,
+    eps: float = 1e-6,
+) -> CageCeResult:
+    """CAGE proximal graph-energy correction around an existing candidate."""
+
+    update_f = torch.nan_to_num(update.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    k = torch.nan_to_num(keys.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    y = torch.nan_to_num(targets.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    w = torch.nan_to_num(weights.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+    all_k = torch.nan_to_num(all_keys.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    all_h = torch.nan_to_num(all_outputs.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    tok = token_indices.detach().cpu().long()
+    if update_f.ndim != 2:
+        raise ValueError(f"update must be [d,m], got {tuple(update_f.shape)}")
+    d_model, d_ff = update_f.shape
+    if k.ndim != 2 or k.shape[1] != d_ff or y.ndim != 2 or y.shape[1] != d_model or k.shape[0] != y.shape[0]:
+        raise ValueError("CAGE keys/targets do not match update shape")
+    if w.ndim != 1 or w.shape[0] != k.shape[0]:
+        raise ValueError("CAGE weights must align with selected rows")
+    if all_k.ndim != 2 or all_k.shape[1] != d_ff or all_h.ndim != 2 or all_h.shape[1] != d_model:
+        raise ValueError("CAGE all_keys/all_outputs do not match update shape")
+
+    diagnostics: dict[str, float] = {
+        "cage_ce_enabled": 1.0,
+        "cage_ce_update_fro_before": float(torch.linalg.vector_norm(update_f).item()),
+    }
+    if k.shape[0] < 2:
+        diagnostics["cage_ce_fallback"] = 1.0
+        return CageCeResult(update=update_f.contiguous(), diagnostics=diagnostics)
+
+    selected_tokens = tok.clamp(min=0, max=max(all_h.shape[0] - 1, 0))
+    h_sel = all_h[selected_tokens]
+    node_idx, b_obj, edge_w = _tagce_incidence_graph(
+        k,
+        h_sel,
+        w / w.mean().clamp_min(float(eps)),
+        selected_tokens,
+        max_nodes=max_object_nodes,
+        max_edges=max_object_edges,
+        top_k=edge_sim_top_k,
+        add_closure=True,
+        eps=eps,
+    )
+    if b_obj.shape[0] == 0:
+        diagnostics["cage_ce_fallback"] = 1.0
+        return CageCeResult(update=update_f.contiguous(), diagnostics=diagnostics)
+    if shuffle_graph and b_obj.shape[1] > 1:
+        b_obj = b_obj[:, torch.roll(torch.arange(b_obj.shape[1]), shifts=1)]
+    k_obj = k[node_idx]
+    y_obj = y[node_idx]
+    h_obj = h_sel[node_idx]
+    w_obj_raw = w[node_idx].clamp_min(0.0)
+    w_obj = w_obj_raw / w_obj_raw.sum().clamp_min(float(eps))
+    x_edge = b_obj @ k_obj
+    d_raw = b_obj @ y_obj
+    d_star, _node_potential, cycle_residual = _tagce_settle_edge_target(
+        b_obj,
+        x_edge,
+        d_raw,
+        smooth_alpha=edge_smooth_alpha,
+        edge_sim_top_k=edge_sim_top_k,
+        disable_graph_settle=disable_graph_settle,
+        eps=eps,
+    )
+
+    obj_rows: list[torch.Tensor] = []
+    obj_targets: list[torch.Tensor] = []
+    if edge_weight > 0:
+        scale = float(edge_weight) ** 0.5
+        obj_rows.append(scale * x_edge)
+        obj_targets.append(scale * d_star)
+    if centroid_weight > 0:
+        scale = float(centroid_weight) ** 0.5
+        obj_rows.append(scale * (w_obj.unsqueeze(0) @ k_obj))
+        obj_targets.append(scale * (w_obj.unsqueeze(0) @ y_obj))
+    lowfreq_modes = torch.empty(0, b_obj.shape[1], dtype=torch.float32)
+    lowfreq_keys = torch.empty(0, d_ff, dtype=torch.float32)
+    lowfreq_targets = torch.empty(0, d_model, dtype=torch.float32)
+    row_scores = _token_row_surprise(all_k, layer)
+    threshold = torch.quantile(row_scores, min(max(float(low_surprise_quantile), 0.0), 1.0))
+    low_mask = row_scores <= threshold
+    if int(low_mask.sum().item()) < 2:
+        low_mask = row_scores <= row_scores.median()
+    low_idx = torch.nonzero(low_mask, as_tuple=False).flatten()
+    k_low = all_k[low_idx] if low_idx.numel() > 0 else torch.empty(0, d_ff)
+    generic_key_basis = _fast_mixed_signal_risk_candidate_basis(
+        k_obj,
+        k_low if k_low.numel() > 0 else all_k,
+        None,
+        dim=d_ff,
+        rank=max(1, int(ambient_key_rank)),
+        eps=max(float(schur_ridge), float(eps)),
+    )[0]
+    if not disable_lowfreq and lowfreq_weight > 0:
+        lowfreq_modes = _tagce_low_frequency_node_modes(b_obj, rank=lowfreq_rank, eps=eps)
+        if lowfreq_modes.numel() > 0:
+            lowfreq_keys = lowfreq_modes @ k_obj
+            if generic_key_basis.numel() > 0:
+                lowfreq_keys = lowfreq_keys - (lowfreq_keys @ generic_key_basis.T) @ generic_key_basis
+            lowfreq_targets = lowfreq_modes @ y_obj
+            if float(torch.linalg.vector_norm(lowfreq_keys).item()) > float(eps):
+                scale = float(lowfreq_weight) ** 0.5
+                obj_rows.append(scale * lowfreq_keys)
+                obj_targets.append(scale * lowfreq_targets)
+    if not obj_rows:
+        diagnostics["cage_ce_fallback"] = 1.0
+        return CageCeResult(update=update_f.contiguous(), diagnostics=diagnostics)
+    a_obj = torch.cat(obj_rows, dim=0)
+    t_obj = torch.cat(obj_targets, dim=0)
+
+    posture_parts: list[torch.Tensor | None] = []
+    if output_basis is not None and output_basis.numel() > 0:
+        out = output_basis.detach().float().cpu()
+        if out.ndim == 1:
+            out = out.unsqueeze(0)
+        if out.ndim == 2 and out.shape[1] == d_model:
+            posture_parts.append(out[: max(1, int(posture_rank) // 2)])
+    if low_idx.numel() > 0:
+        posture_parts.append(_fast_basis_with_rows(all_h[low_idx], max(1, int(posture_rank) // 3), d_model))
+    m0 = update_f.T.contiguous()
+    candidate_effect = k_obj @ m0
+    posture_parts.extend(
+        [
+            y_obj.mean(dim=0, keepdim=True),
+            candidate_effect.mean(dim=0, keepdim=True),
+            h_obj.mean(dim=0, keepdim=True),
+        ]
+    )
+    posture_basis = _orthonormal_basis(posture_parts, d_model)[: max(0, int(posture_rank))]
+    if not disable_schur:
+        t_obj_resid, absorbed_ratio, row_rank, posture_used_rank = _cage_schur_residualize_target(
+            t_obj,
+            a_obj,
+            generic_key_basis,
+            posture_basis,
+            eps=eps,
+        )
+    else:
+        t_obj_resid = t_obj
+        absorbed_ratio = 0.0
+        row_rank = 0
+        posture_used_rank = 0
+
+    ambient_rows: list[torch.Tensor] = []
+    if low_idx.numel() > 0 and max_ambient_nodes > 0:
+        low_score = (row_scores.max() - row_scores[low_idx]).clamp_min(0.0) + float(eps)
+        if low_idx.numel() > max_ambient_nodes:
+            keep = torch.topk(low_score, k=int(max_ambient_nodes), largest=True).indices.sort().values
+            low_idx = low_idx[keep]
+            low_score = low_score[keep]
+        _amb_node_idx, b_amb, _amb_edge_w = _tagce_incidence_graph(
+            all_k[low_idx],
+            all_h[low_idx],
+            low_score,
+            low_idx,
+            max_nodes=max_ambient_nodes,
+            max_edges=max_ambient_edges,
+            top_k=edge_sim_top_k,
+            add_closure=False,
+            eps=eps,
+        )
+        if b_amb.numel() > 0:
+            ambient_rows.append(b_amb @ all_k[low_idx])
+    neg = negative_keys.detach().float().cpu() if negative_keys is not None and negative_keys.numel() > 0 else None
+    if neg is not None and (neg.ndim != 2 or neg.shape[1] != d_ff):
+        neg = None
+
+    rows = [a_obj]
+    vals = [t_obj_resid]
+    if ambient_weight > 0:
+        for amb in ambient_rows:
+            if amb.numel() > 0:
+                rows.append((float(ambient_weight) ** 0.5) * amb)
+                vals.append(torch.zeros(amb.shape[0], d_model, dtype=torch.float32))
+    if neg is not None and negative_weight > 0:
+        rows.append((float(negative_weight) ** 0.5) * neg)
+        vals.append(torch.zeros(neg.shape[0], d_model, dtype=torch.float32))
+    a_all = torch.cat(rows, dim=0)
+    y_all = torch.cat(vals, dim=0)
+
+    before_obj_error = torch.linalg.vector_norm(a_obj @ m0 - t_obj_resid).square()
+    before_ambient = sum(torch.linalg.vector_norm(amb @ m0).square() for amb in ambient_rows) if ambient_rows else torch.zeros(())
+    m_star, raw_corr_norm, corr_norm = _cage_proximal_rowspace_correction(
+        m0,
+        a_all,
+        y_all,
+        ridge=prox_ridge,
+        correction_cap=correction_cap,
+        eps=eps,
+    )
+    after_obj_error = torch.linalg.vector_norm(a_obj @ m_star - t_obj_resid).square()
+    after_ambient = sum(torch.linalg.vector_norm(amb @ m_star).square() for amb in ambient_rows) if ambient_rows else torch.zeros(())
+    update_out = m_star.T.contiguous()
+    fit_rows = k @ update_out.T
+    diagnostics.update(
+        {
+            "cage_ce_fallback": 0.0,
+            "cage_ce_object_nodes": float(k_obj.shape[0]),
+            "cage_ce_object_edges": float(b_obj.shape[0]),
+            "cage_ce_object_rows": float(a_obj.shape[0]),
+            "cage_ce_ambient_rows": float(sum(amb.shape[0] for amb in ambient_rows)),
+            "cage_ce_posture_rank": float(posture_basis.shape[0]),
+            "cage_ce_schur_row_rank": float(row_rank),
+            "cage_ce_schur_value_rank": float(posture_used_rank),
+            "cage_ce_schur_absorbed_ratio": float(absorbed_ratio),
+            "cage_ce_graph_cycle_residual": float(cycle_residual),
+            "cage_ce_lowfreq_rank": float(lowfreq_modes.shape[0]) if lowfreq_modes.ndim == 2 else 0.0,
+            "cage_ce_lowfreq_key_norm": float(torch.linalg.vector_norm(lowfreq_keys).item()) if lowfreq_keys.numel() > 0 else 0.0,
+            "cage_ce_object_error_before": float(before_obj_error.item()),
+            "cage_ce_object_error_after": float(after_obj_error.item()),
+            "cage_ce_object_error_reduction": float((before_obj_error - after_obj_error).item()),
+            "cage_ce_ambient_energy_before": float(before_ambient.item()),
+            "cage_ce_ambient_energy_after": float(after_ambient.item()),
+            "cage_ce_raw_correction_fro": float(raw_corr_norm),
+            "cage_ce_correction_fro": float(corr_norm),
+            "cage_ce_correction_cap": float(correction_cap),
+            "cage_ce_disable_schur": 1.0 if disable_schur else 0.0,
+            "cage_ce_disable_graph_settle": 1.0 if disable_graph_settle else 0.0,
+            "cage_ce_disable_lowfreq": 1.0 if disable_lowfreq else 0.0,
+            "cage_ce_shuffle_graph": 1.0 if shuffle_graph else 0.0,
+            "cage_ce_update_fro_after": float(torch.linalg.vector_norm(update_out).item()),
+            "cage_ce_fit_rmse": float(torch.sqrt(torch.mean((fit_rows - y).square())).item()),
+        }
+    )
+    return CageCeResult(update=update_out.contiguous(), diagnostics=diagnostics)
 
 
 def qrico_purify_update(

@@ -3138,3 +3138,88 @@ DICE key-effect 4+4 anti: 0/4 -> 1/4, c2w 0, drop 0.057, max drop 0.598
 Key-effect support is denser in effect space than raw-coordinate support, but
 both produce the same small safe shard. The bottleneck is still semantic payload
 recovery, not final update scale.
+
+## Postscript 13: New CAGE Result To Incorporate
+
+I implemented your Candidate-Anchored Graph Energy idea as `cage_ce`.
+
+Core implementation:
+
+```text
+M* = M0 + argmin_Z lambda ||Z||^2
+           + alpha ||A_object (M0 + Z) - T_object||^2
+           + beta  ||A_ambient (M0 + Z)||^2
+```
+
+This was intentionally candidate-anchored: it keeps the direct
+relational/context-value candidate `M0` and applies a bounded proximal
+graph-functional correction. It does not replace the candidate with a new
+TAG-CE edge-field refit.
+
+It includes sparse object graph rows, centroid rows, object-conditioned
+low-frequency rows, Schur residualization of generic row-mode x posture/value
+fields, ambient graph rows, and a correction cap.
+
+Verification:
+
+```text
+pytest tests/test_intrinsic_surprise.py -q
+# 46 passed
+```
+
+Local raw-acquiring gate, Lyran seed 1/candidates 20:
+
+| Run | Baseline | Context | Edited | c2w | before-correct drop | max drop |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Raw relational reference | `1/4` | `4/4` | `2/4` | `0` | `2.812` | `9.808` |
+| CAGE default, cap `.35` | `1/4` | `4/4` | `2/4` | `0` | `3.892` | `15.722` |
+| CAGE tighter cap `.10` | `1/4` | `4/4` | `2/4` | `0` | `2.912` | `9.792` |
+
+Interpretation:
+
+```text
+TAG-CE v1: safety-relevant but acquisition-stripping.
+CAGE v1: acquisition-preserving but not safety-improving.
+DICE anti-support: safety-clean but payload-sparse.
+```
+
+CAGE candidate anchoring worked in the narrow sense: it preserved the
+threshold-crossing acquisition that TAG-CE v1 lost. But it did not improve
+sentinel-margin damage. Default CAGE worsened margin damage; cap `.10` mostly
+reverted to raw relational behavior.
+
+Please propose the next implementable step under the hard constraints:
+
+- no labels, sentinels, probes, null prompts, SAE, RAG, router, or task ID in
+  the write rule;
+- no sidecar state across tasks; task1 receives only updated model weights;
+- DICE-style extra contexts are allowed inside the current write construction,
+  but no context memory survives except through weights;
+- primary target is two-task acquisition/retention plus sentinel preservation;
+- method must be cheap enough for the reduced `continual_benchmark_grid.py`
+  loop.
+
+The key question:
+
+```text
+How do we keep the threshold-bearing relational/context-value carrier while
+separating it from generic posture/default damage?
+```
+
+Candidate directions:
+
+1. Keep CAGE's candidate-anchored proximal framing, but derive the Schur nuisance
+   modes from DICE same-language support vs same-format rival anti-support,
+   rather than low-surprise graph modes.
+2. Use CAGE graph functionals as the DICE support coordinate instead of raw
+   matrix entries or first-order key-effect rows.
+3. Find a richer maplet coordinate than first-order key-effect DICE, because
+   current DICE anti-support is extremely safe but preserves only a one-item
+   semantic shard.
+4. Treat CAGE object/ambient energy diagnostics as untrusted until they
+   correlate with actual sentinel-margin drops across raw, CAGE, DICE, and
+   Q-RICO variants.
+
+Please be blunt. If CAGE v1 should be abandoned, say so and explain the next
+better coordinate. If it should be repaired, give a concrete closed-form update
+and the first three cheap experiments.

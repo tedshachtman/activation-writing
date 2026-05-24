@@ -3247,3 +3247,77 @@ high-support fraction `0.0057`), but both reconstruct the same small safe shard.
 This confirms the current DICE bottleneck: anti-support removes posture damage,
 but current support coordinates still do not preserve enough threshold-bearing
 semantic payload.
+
+## Postscript 15: CAGE Implemented, Preserves Acquisition But Does Not Improve Safety
+
+After the Candidate-Anchored Graph Energy proposal, I implemented the first
+`cage_ce` purifier. This is a post-solve proximal correction around the
+acquisition-bearing relational/context-value candidate:
+
+```text
+M* = M0 + argmin_Z lambda ||Z||^2
+           + alpha ||A_object (M0 + Z) - T_object||^2
+           + beta  ||A_ambient (M0 + Z)||^2
+```
+
+It keeps the raw candidate `M0` instead of refitting from a new TAG-CE edge
+target. The implementation includes sparse object graph rows, centroid rows,
+object-conditioned low-frequency rows, Schur residualization of generic
+row-mode x posture/value-mode fields, ambient/default graph rows, and a bounded
+correction cap.
+
+Code/tests:
+
+```text
+--intrinsic-target-purifier cage_ce
+pytest tests/test_intrinsic_surprise.py -q
+# 46 passed
+```
+
+Local raw-acquiring gate, Lyran seed 1/candidates 20:
+
+| Run | Baseline | Context | Edited | c2w | before-correct drop | max drop |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Raw relational reference | `1/4` | `4/4` | `2/4` | `0` | `2.812` | `9.808` |
+| CAGE default, cap `.35` | `1/4` | `4/4` | `2/4` | `0` | `3.892` | `15.722` |
+| CAGE tighter cap `.10` | `1/4` | `4/4` | `2/4` | `0` | `2.912` | `9.792` |
+
+The good news is that candidate anchoring did what TAG-CE v1 failed to do: it
+preserved the threshold-crossing acquisition on the known raw-positive split.
+The bad news is that it did not reduce sentinel-margin damage. Default CAGE
+worsened the margin damage; cap `.10` mostly collapsed back to raw relational.
+
+Please update the live interpretation:
+
+```text
+TAG-CE v1: safety-relevant but acquisition-stripping.
+CAGE v1: acquisition-preserving but not safety-improving.
+DICE anti-support: safety-clean but payload-sparse.
+```
+
+The next proposal should not assume that candidate anchoring alone solves the
+global-coherence problem. The missing coordinate is still the separation between
+threshold-bearing semantic deformation and generic posture/default damage.
+
+Useful next directions to consider:
+
+1. Keep the candidate-anchored proximal framing, but derive the Schur nuisance
+   row/value modes from DICE same-language support versus same-format rival
+   anti-support rather than generic low-surprise graph modes.
+2. Use CAGE graph functionals as the DICE support coordinate instead of raw
+   matrix entries or first-order key-effect rows.
+3. Find a maplet coordinate that preserves more than the current one-item DICE
+   shard while retaining same-format anti-support's strong sentinel protection.
+4. Treat CAGE's current object/ambient energy diagnostics as untrusted until
+   they are shown to correlate with sentinel margin drops across raw, CAGE,
+   DICE, and Q-RICO variants.
+
+Hard constraints remain unchanged:
+
+- no labels, sentinels, probes, null prompts, SAE, RAG, router, or task ID in
+  the write rule;
+- no sidecar state across tasks; after task0, task1 receives only the updated
+  model weights;
+- contexts used for DICE-style write construction are allowed inside the
+  current write, but nothing about them may survive except through weights;
+- primary target is two-task acquisition/retention plus sentinel preservation.

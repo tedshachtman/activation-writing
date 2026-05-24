@@ -23,6 +23,7 @@ from caic.intrinsic_surprise import (
     apply_mlp_gauge_seal_,
     apply_intrinsic_feature_birth_update_,
     base_down_weight,
+    cage_ce_purify_update,
     down_output_basis_specificity,
     down_value_specificity,
     effective_down_weight,
@@ -2750,6 +2751,7 @@ def parse_args() -> argparse.Namespace:
             "tdmi_q",
             "wm_coherence",
             "tag_ce",
+            "cage_ce",
             "trace_q",
             "spectra",
             "seal_qrico",
@@ -2855,6 +2857,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tagce-disable-graph-settle", action="store_true")
     parser.add_argument("--tagce-shuffle-edge-targets", action="store_true")
     parser.add_argument("--tagce-shuffle-incidence", action="store_true")
+    parser.add_argument("--cage-edge-max", type=int, default=192)
+    parser.add_argument("--cage-ambient-edge-max", type=int, default=192)
+    parser.add_argument("--cage-lowfreq-rank", type=int, default=4)
+    parser.add_argument("--cage-ambient-rank", type=int, default=8)
+    parser.add_argument("--cage-value-nuisance-rank", type=int, default=32)
+    parser.add_argument("--cage-edge-weight", type=float, default=1.0)
+    parser.add_argument("--cage-centroid-weight", type=float, default=0.35)
+    parser.add_argument("--cage-lowfreq-weight", type=float, default=0.50)
+    parser.add_argument("--cage-ambient-weight", type=float, default=2.0)
+    parser.add_argument("--cage-schur-ridge", type=float, default=1e-3)
+    parser.add_argument("--cage-prox-ridge", type=float, default=0.25)
+    parser.add_argument("--cage-correction-cap", type=float, default=0.35)
+    parser.add_argument("--cage-disable-schur", action="store_true")
+    parser.add_argument("--cage-disable-graph-settle", action="store_true")
+    parser.add_argument("--cage-disable-lowfreq", action="store_true")
+    parser.add_argument("--cage-shuffle-graph", action="store_true")
     parser.add_argument("--prism-horizon", type=int, default=4)
     parser.add_argument("--prism-signal-rank", type=int, default=16)
     parser.add_argument("--prism-hazard-rank", type=int, default=16)
@@ -4279,6 +4297,51 @@ def run_intrinsic_surprise_writes(
                 if selection.diagnostics is None:
                     selection.diagnostics = {}
                 selection.diagnostics.update(tag.diagnostics)
+            elif args.intrinsic_target_purifier == "cage_ce":
+                cage = cage_ce_purify_update(
+                    update,
+                    keys=selection.keys,
+                    targets=targets,
+                    weights=positive_weights,
+                    all_keys=usable_keys,
+                    all_outputs=captures[layer_idx].outputs[: usable_keys.shape[0]],
+                    token_indices=selection.token_indices,
+                    layer=layer,
+                    negative_keys=negative_keys,
+                    output_basis=karp_output_basis,
+                    max_object_nodes=args.tagce_max_object_nodes,
+                    max_ambient_nodes=args.tagce_max_ambient_nodes,
+                    max_object_edges=args.cage_edge_max,
+                    max_ambient_edges=args.cage_ambient_edge_max,
+                    edge_smooth_alpha=args.tagce_edge_smooth_alpha,
+                    edge_sim_top_k=args.tagce_edge_sim_top_k,
+                    posture_rank=args.cage_value_nuisance_rank,
+                    ambient_key_rank=args.cage_ambient_rank,
+                    edge_weight=args.cage_edge_weight,
+                    centroid_weight=args.cage_centroid_weight,
+                    lowfreq_weight=args.cage_lowfreq_weight,
+                    lowfreq_rank=args.cage_lowfreq_rank,
+                    ambient_weight=args.cage_ambient_weight,
+                    negative_weight=args.intrinsic_surprise_input_penalty_weight,
+                    schur_ridge=args.cage_schur_ridge,
+                    prox_ridge=args.cage_prox_ridge,
+                    correction_cap=args.cage_correction_cap,
+                    disable_schur=args.cage_disable_schur,
+                    disable_graph_settle=args.cage_disable_graph_settle,
+                    disable_lowfreq=args.cage_disable_lowfreq,
+                    shuffle_graph=args.cage_shuffle_graph,
+                    low_surprise_quantile=args.karp_low_surprise_quantile,
+                )
+                update = cage.update
+                fit = selection.keys.detach().float() @ update.T
+                stats.fit_rmse = float(torch.sqrt(torch.mean((fit - targets.detach().float()).square())).item())
+                stats.update_fro = float(torch.linalg.vector_norm(update).item())
+                if negative_keys is not None and negative_keys.numel() > 0:
+                    neg_fit = negative_keys.detach().float() @ update.T
+                    stats.negative_rmse = float(torch.sqrt(torch.mean(neg_fit.square())).item())
+                if selection.diagnostics is None:
+                    selection.diagnostics = {}
+                selection.diagnostics.update(cage.diagnostics)
             elif args.intrinsic_target_purifier == "tdmi_q":
                 preliminary_qrico = qrico_purify_update(
                     update,

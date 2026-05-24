@@ -5,6 +5,7 @@ from torch.nn import functional as F
 from caic.intrinsic_surprise import (
     attention_flow_values,
     apply_mlp_gauge_seal_,
+    cage_ce_purify_update,
     down_output_basis_specificity,
     down_value_specificity,
     gauge_canonical_key_scale,
@@ -1789,3 +1790,129 @@ def test_tag_ce_keeps_object_specific_readout_edge_field():
     assert result.update.shape == (2, 4)
     assert torch.linalg.vector_norm(result.update) > 0.0
     assert result.diagnostics["tag_ce_object_energy_delta"] > 0.0
+
+
+def test_cage_ce_absorbs_generic_centroid_posture():
+    keys = torch.eye(4)
+    current = torch.randn(4, 2)
+    targets = torch.tensor(
+        [
+            [0.0, 1.0],
+            [0.0, 1.0],
+            [0.0, 1.0],
+            [0.0, 1.0],
+        ]
+    )
+    base_update = torch.zeros(2, 4)
+    posture = torch.tensor([[0.0, 1.0]])
+
+    absorbed = cage_ce_purify_update(
+        base_update,
+        keys=keys,
+        targets=targets,
+        weights=torch.ones(4),
+        all_keys=keys,
+        all_outputs=current,
+        token_indices=torch.arange(4),
+        output_basis=posture,
+        edge_weight=0.0,
+        centroid_weight=1.0,
+        lowfreq_weight=0.0,
+        ambient_weight=0.0,
+        disable_graph_settle=True,
+        prox_ridge=1e-3,
+        correction_cap=10.0,
+    )
+    unabsorbed = cage_ce_purify_update(
+        base_update,
+        keys=keys,
+        targets=targets,
+        weights=torch.ones(4),
+        all_keys=keys,
+        all_outputs=current,
+        token_indices=torch.arange(4),
+        output_basis=posture,
+        edge_weight=0.0,
+        centroid_weight=1.0,
+        lowfreq_weight=0.0,
+        ambient_weight=0.0,
+        disable_schur=True,
+        disable_graph_settle=True,
+        prox_ridge=1e-3,
+        correction_cap=10.0,
+    )
+
+    assert absorbed.update.shape == base_update.shape
+    assert absorbed.diagnostics["cage_ce_enabled"] == 1.0
+    assert absorbed.diagnostics["cage_ce_schur_absorbed_ratio"] > 0.5
+    assert torch.linalg.vector_norm(absorbed.update) < torch.linalg.vector_norm(unabsorbed.update)
+
+
+def test_cage_ce_keeps_object_specific_readout_edge_field():
+    keys = torch.eye(4)
+    current = torch.tensor(
+        [
+            [1.0, 0.0],
+            [0.8, 0.2],
+            [0.0, 1.0],
+            [0.2, 0.8],
+        ]
+    )
+    targets = torch.tensor(
+        [
+            [0.0, 0.0],
+            [0.0, 1.0],
+            [0.0, 0.0],
+            [0.0, -1.0],
+        ]
+    )
+
+    result = cage_ce_purify_update(
+        torch.zeros(2, 4),
+        keys=keys,
+        targets=targets,
+        weights=torch.ones(4),
+        all_keys=keys,
+        all_outputs=current,
+        token_indices=torch.arange(4),
+        output_basis=torch.tensor([[0.0, 1.0]]),
+        edge_weight=1.0,
+        centroid_weight=0.0,
+        lowfreq_weight=0.0,
+        ambient_weight=0.0,
+        disable_graph_settle=True,
+        prox_ridge=1e-3,
+        correction_cap=10.0,
+    )
+
+    assert result.update.shape == (2, 4)
+    assert torch.linalg.vector_norm(result.update) > 0.0
+    assert result.diagnostics["cage_ce_object_error_reduction"] > 0.0
+
+
+def test_cage_ce_correction_cap_bounds_update_delta():
+    keys = torch.eye(4)
+    current = torch.randn(4, 2)
+    targets = 10.0 * torch.randn(4, 2)
+    base_update = 0.1 * torch.ones(2, 4)
+
+    result = cage_ce_purify_update(
+        base_update,
+        keys=keys,
+        targets=targets,
+        weights=torch.ones(4),
+        all_keys=keys,
+        all_outputs=current,
+        token_indices=torch.arange(4),
+        edge_weight=1.0,
+        centroid_weight=1.0,
+        lowfreq_weight=0.0,
+        ambient_weight=0.0,
+        disable_schur=True,
+        disable_graph_settle=True,
+        prox_ridge=1e-3,
+        correction_cap=0.2,
+    )
+
+    delta = result.update - base_update
+    assert torch.linalg.vector_norm(delta) <= 0.201 * torch.linalg.vector_norm(base_update)

@@ -208,6 +208,7 @@ def parse_args() -> argparse.Namespace:
             "tdmi_q",
             "wm_coherence",
             "tag_ce",
+            "cage_ce",
             "trace_q",
             "spectra",
             "seal_qrico",
@@ -313,6 +314,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tagce-disable-graph-settle", action="store_true")
     parser.add_argument("--tagce-shuffle-edge-targets", action="store_true")
     parser.add_argument("--tagce-shuffle-incidence", action="store_true")
+    parser.add_argument("--cage-edge-max", type=int, default=192)
+    parser.add_argument("--cage-ambient-edge-max", type=int, default=192)
+    parser.add_argument("--cage-lowfreq-rank", type=int, default=4)
+    parser.add_argument("--cage-ambient-rank", type=int, default=8)
+    parser.add_argument("--cage-value-nuisance-rank", type=int, default=32)
+    parser.add_argument("--cage-edge-weight", type=float, default=1.0)
+    parser.add_argument("--cage-centroid-weight", type=float, default=0.35)
+    parser.add_argument("--cage-lowfreq-weight", type=float, default=0.50)
+    parser.add_argument("--cage-ambient-weight", type=float, default=2.0)
+    parser.add_argument("--cage-schur-ridge", type=float, default=1e-3)
+    parser.add_argument("--cage-prox-ridge", type=float, default=0.25)
+    parser.add_argument("--cage-correction-cap", type=float, default=0.35)
+    parser.add_argument("--cage-disable-schur", action="store_true")
+    parser.add_argument("--cage-disable-graph-settle", action="store_true")
+    parser.add_argument("--cage-disable-lowfreq", action="store_true")
+    parser.add_argument("--cage-shuffle-graph", action="store_true")
     parser.add_argument("--prism-horizon", type=int, default=4)
     parser.add_argument("--prism-signal-rank", type=int, default=16)
     parser.add_argument("--prism-hazard-rank", type=int, default=16)

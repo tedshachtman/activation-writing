@@ -8153,3 +8153,74 @@ safe, one-item shard. The next bottleneck is still not final update norm or
 support threshold. It is the missing coordinate that preserves more of the
 threshold-bearing semantic payload while keeping same-format anti-support's
 posture cancellation.
+
+### CAGE Candidate-Anchored Graph Energy Implemented
+
+I implemented the first CAGE variant as a post-solve proximal correction around
+the acquisition-bearing relational/context-value candidate. This differs from
+TAG-CE v1: CAGE does not replace the raw node target with a fresh edge-field
+solve. It keeps the direct candidate `M0` and applies a bounded graph-functional
+correction:
+
+```text
+M* = M0 + argmin_Z lambda ||Z||^2
+           + alpha ||A_object (M0 + Z) - T_object||^2
+           + beta  ||A_ambient (M0 + Z)||^2
+```
+
+Implementation details:
+
+- new purifier mode: `--intrinsic-target-purifier cage_ce`
+- object graph rows from sparse key/target/effect similarity edges, component
+  centroid rows, and object-conditioned low-frequency graph rows;
+- Schur residualization of only generic row-mode x posture/value-mode fields;
+- ambient/default graph rows from same-pass low-surprise states with zero
+  target;
+- bounded proximal row-space correction around the candidate map, with
+  `--cage-correction-cap`;
+- ablation presets added for no-lowfreq, no-Schur, and shuffled graph.
+
+Verification:
+
+```text
+python -m py_compile caic/intrinsic_surprise.py scripts/minilang_write.py \
+  scripts/minilang_intrinsic_continual.py scripts/continual_benchmark_grid.py
+pytest tests/test_intrinsic_surprise.py -q
+# 46 passed
+```
+
+First local gate, same raw-acquiring Lyran seed 1 split:
+
+| Run | Baseline | Context | Edited | c2w | before-correct drop | max drop |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Raw relational reference | `1/4` | `4/4` | `2/4` | `0` | `2.812` | `9.808` |
+| CAGE default, cap `.35` | `1/4` | `4/4` | `2/4` | `0` | `3.892` | `15.722` |
+| CAGE tighter cap `.10` | `1/4` | `4/4` | `2/4` | `0` | `2.912` | `9.792` |
+
+Interpretation:
+
+- Candidate anchoring worked in the narrow sense: CAGE did not destroy the raw
+  relational threshold component on this split. That is different from TAG-CE
+  v1, which got safe by losing acquisition.
+- The graph correction did not improve sentinel margins. The default correction
+  made margin damage worse; a tighter cap mostly reverted to raw relational
+  behavior.
+- This is not yet a safety coordinate. The current graph/posture functional is
+  either correcting in the wrong direction or too weakly tied to the actual
+  sentinel-damaging component.
+
+Current status:
+
+```text
+CAGE v1: acquisition-preserving but not safety-improving.
+TAG-CE v1: safety-relevant but acquisition-stripping.
+DICE anti-support: safety-clean but payload-sparse.
+```
+
+The next useful fork is probably not more CAGE scale tuning. The most
+informative next CAGE ablations would be `no_schur`, `no_lowfreq`, shuffled
+graph, and matched-Fro raw, but the first result already says the candidate
+anchor alone is not enough. If CAGE remains interesting, the row/value nuisance
+coordinate needs to be learned from DICE-style rival support or from actual
+sentinel-correlated damage diagnostics, not from the current generic graph
+posture basis alone.
