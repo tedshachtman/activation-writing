@@ -44,6 +44,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lessons-per-task", type=int, default=6)
     parser.add_argument("--lesson-examples", type=int, default=8)
     parser.add_argument("--teacher-filter-candidates", type=int, default=20)
+    parser.add_argument(
+        "--teacher-filter-require-baseline-wrong",
+        action="store_true",
+        help="Filter to questions where the base model is wrong and full context is correct.",
+    )
     parser.add_argument("--eval-questions", type=int, default=4)
     parser.add_argument("--max-length", type=int, default=2048)
     parser.add_argument("--chat-template", action="store_true")
@@ -82,6 +87,19 @@ def main() -> None:
                 final_lesson_idx,
                 "heldout_translation",
             )
+            baseline_candidates = None
+            if args.teacher_filter_require_baseline_wrong:
+                baseline_candidates = evaluate_task_mc(
+                    model,
+                    tokenizer,
+                    profile,
+                    candidates,
+                    device,
+                    context=None,
+                    max_length=args.max_length,
+                    use_chat_template=args.chat_template,
+                )
+                release_device_cache(device)
             context_candidates = evaluate_task_mc(
                 model,
                 tokenizer,
@@ -95,8 +113,12 @@ def main() -> None:
             release_device_cache(device)
             filtered = [
                 question
-                for question, detail in zip(candidates, context_candidates["details"], strict=True)
+                for idx, (question, detail) in enumerate(zip(candidates, context_candidates["details"], strict=True))
                 if detail["correct"]
+                and (
+                    baseline_candidates is None
+                    or not bool(baseline_candidates["details"][idx]["correct"])
+                )
             ]
             eval_questions = filtered[: args.eval_questions]
             if not eval_questions:

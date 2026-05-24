@@ -3394,3 +3394,54 @@ Please treat this as another argument against raw-coordinate DICE. If DICE is
 still the right family, the support/anti-support coordinate must be upgraded to
 a functional maplet/role-aligned coordinate that preserves more of the
 acquisition-bearing update while subtracting same-format rival posture.
+
+## Postscript 17: Benchmark Filter Mismatch Found
+
+Important harness issue: the older clean benchmark builder's `teacher_filter`
+required:
+
+```text
+baseline wrong AND full-context teacher correct
+```
+
+The current continual runner and split screeners were only requiring:
+
+```text
+full-context teacher correct
+```
+
+So recent continual teacher-filtered eval sets can include items the no-context
+base model already gets right. That explains why recent reruns show base
+`1/20` or `2/20`, while older clean runs were base `0/20`.
+
+This does not invalidate sentinel damage measurements or the fact that DICE
+anti-support acts as a strong safety brake. It does weaken exact acquisition
+comparisons, especially when comparing old `0/20 -> 10/20` associative results
+to current `2/20 -> 4/20` reruns.
+
+I added:
+
+```text
+--teacher-filter-require-baseline-wrong
+```
+
+and wired it into:
+
+```text
+scripts/minilang_intrinsic_continual.py
+scripts/minilang_continual_triangle.py
+scripts/screen_minilang_splits.py
+scripts/screen_raw_minilang_splits.py
+```
+
+It is now included in `scripts/continual_benchmark_grid.py` common args for
+future standardized preset runs.
+
+Before over-interpreting the current DICE/CAGE/associative results, rerun under
+the strict base-wrong/context-correct filter:
+
+1. associative layer20 raw;
+2. associative DICE `4+4` anti;
+3. raw relational;
+4. raw relational DICE `4+4` anti;
+5. Q-RICO key16.

@@ -34,6 +34,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lessons-per-task", type=int, default=6)
     parser.add_argument("--lesson-examples", type=int, default=8)
     parser.add_argument("--teacher-filter-candidates", type=int, default=20)
+    parser.add_argument("--teacher-filter-require-baseline-wrong", action="store_true")
     parser.add_argument("--eval-questions", type=int, default=4)
     parser.add_argument("--layers", default="4,8,12,16,20,24,27")
     parser.add_argument("--sentinel-suite", default="core")
@@ -113,6 +114,11 @@ def main() -> None:
                 "--teacher-filter-eval",
                 "--teacher-filter-candidates",
                 str(args.teacher_filter_candidates),
+                *(
+                    ["--teacher-filter-require-baseline-wrong"]
+                    if args.teacher_filter_require_baseline_wrong
+                    else []
+                ),
                 "--eval-questions",
                 str(args.eval_questions),
                 "--layers",

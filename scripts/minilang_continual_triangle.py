@@ -484,6 +484,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-questions", type=int, default=8)
     parser.add_argument("--teacher-filter-eval", action="store_true")
     parser.add_argument("--teacher-filter-candidates", type=int, default=80)
+    parser.add_argument("--teacher-filter-require-baseline-wrong", action="store_true")
     parser.add_argument("--layer", type=int, default=20)
     parser.add_argument("--ridge", type=float, default=1.0)
     parser.add_argument("--negative-weight", type=float, default=1.0)
@@ -602,6 +603,18 @@ def main() -> None:
                 f"teacher-filtering task={task_idx} language={profile.name} "
                 f"candidates={len(candidates)}"
             )
+            baseline_candidates = None
+            if args.teacher_filter_require_baseline_wrong:
+                baseline_candidates = evaluate_task_mc(
+                    model,
+                    tokenizer,
+                    profile,
+                    candidates,
+                    device,
+                    context=None,
+                    max_length=args.max_length,
+                    use_chat_template=args.chat_template,
+                )
             context_candidates = evaluate_task_mc(
                 model,
                 tokenizer,
@@ -614,8 +627,12 @@ def main() -> None:
             )
             filtered = [
                 question
-                for question, detail in zip(candidates, context_candidates["details"], strict=True)
+                for idx, (question, detail) in enumerate(zip(candidates, context_candidates["details"], strict=True))
                 if detail["correct"]
+                and (
+                    baseline_candidates is None
+                    or not bool(baseline_candidates["details"][idx]["correct"])
+                )
             ]
             if len(filtered) < args.eval_questions:
                 progress(

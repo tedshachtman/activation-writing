@@ -3279,3 +3279,36 @@ on the associative carrier.
 The no-sidecar constraint is still satisfied in the intended sense: the extra
 contexts are used only during the current write construction, then discarded.
 No support gate/context bank/old-key memory is passed to the next task.
+
+## Postscript 15: Benchmark Filter Mismatch Found
+
+Important correction: the older clean benchmark's `teacher_filter` selected
+questions where:
+
+```text
+baseline wrong AND full-context teacher correct
+```
+
+The current continual runner was only selecting:
+
+```text
+full-context teacher correct
+```
+
+So recent continual runs can include items the base model already gets right.
+That partly explains why older high-acquisition runs had base `0/20` while
+recent reruns have base `1/20` or `2/20`.
+
+I added:
+
+```text
+--teacher-filter-require-baseline-wrong
+```
+
+to the continual runner and split screeners, and enabled it in the standard
+benchmark-grid common args.
+
+Please treat recent exact acquisition numbers as lower-confidence until the key
+baselines are rerun under the strict base-wrong/context-correct filter. The
+sentinel damage signals and DICE's safety-brake behavior are still meaningful,
+but method-to-method acquisition comparisons are less clean than assumed.

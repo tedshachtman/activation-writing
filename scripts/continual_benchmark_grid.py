@@ -52,6 +52,7 @@ COMMON_ARGS: tuple[str, ...] = (
     "--teacher-filter-eval",
     "--teacher-filter-candidates",
     "120",
+    "--teacher-filter-require-baseline-wrong",
     "--layers",
     *LAYERS_28,
     "--intrinsic-surprise-target-mode",

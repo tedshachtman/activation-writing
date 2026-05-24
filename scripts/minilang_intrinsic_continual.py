@@ -68,6 +68,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--teacher-filter-eval", action="store_true")
     parser.add_argument("--teacher-filter-candidates", type=int, default=120)
     parser.add_argument(
+        "--teacher-filter-require-baseline-wrong",
+        action="store_true",
+        help="When teacher-filtering eval questions, require no-context baseline wrong and full-context teacher correct.",
+    )
+    parser.add_argument(
         "--early-stop-c2w-over",
         type=int,
         default=-1,
@@ -543,6 +548,19 @@ def main() -> None:
         for task_idx, profile in enumerate(profiles):
             candidates = eval_sets[task_idx]
             progress(f"teacher-filtering task={task_idx} language={profile.name} candidates={len(candidates)}")
+            baseline_candidates = None
+            if args.teacher_filter_require_baseline_wrong:
+                baseline_candidates = evaluate_task_mc(
+                    model,
+                    tokenizer,
+                    profile,
+                    candidates,
+                    device,
+                    context=None,
+                    max_length=args.max_length,
+                    use_chat_template=args.chat_template,
+                )
+                release_device_cache(device)
             context_candidates = evaluate_task_mc(
                 model,
                 tokenizer,
@@ -556,8 +574,12 @@ def main() -> None:
             release_device_cache(device)
             filtered = [
                 question
-                for question, detail in zip(candidates, context_candidates["details"], strict=True)
+                for idx, (question, detail) in enumerate(zip(candidates, context_candidates["details"], strict=True))
                 if detail["correct"]
+                and (
+                    baseline_candidates is None
+                    or not bool(baseline_candidates["details"][idx]["correct"])
+                )
             ]
             eval_sets[task_idx] = filtered[: args.eval_questions]
             stat = {
@@ -568,6 +590,7 @@ def main() -> None:
                 "teacher_filter_candidates": len(candidates),
                 "teacher_filter_correct": len(filtered),
                 "teacher_filter_selected": len(eval_sets[task_idx]),
+                "teacher_filter_require_baseline_wrong": bool(args.teacher_filter_require_baseline_wrong),
                 "seconds": time.time() - started,
             }
             filter_stats.append(stat)

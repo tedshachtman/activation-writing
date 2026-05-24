@@ -8306,3 +8306,65 @@ Interpretation:
   diverse and rival contexts are used only during the current write
   construction, then discarded. The next task/session would receive only the
   updated weights.
+
+### Benchmark Filter Mismatch Found
+
+While reviewing why older high-acquisition results did not reproduce, I found a
+real benchmark mismatch.
+
+The older clean benchmark builder's `teacher_filter` selection required:
+
+```text
+baseline wrong AND full-context teacher correct
+```
+
+The current continual runner and split screeners were only requiring:
+
+```text
+full-context teacher correct
+```
+
+That means current teacher-filtered eval sets can include items the base model
+already gets right. This is visible in recent runs:
+
+```text
+old clean benchmark: base 0/20, context 20/20
+current associative rerun: base 2/20, context 20/20
+current DICE associative rerun: base 1/20, context 20/20
+```
+
+This does not invalidate the sentinel damage measurements, and it does not make
+DICE's safety effect fake. But it does weaken acquisition comparisons and
+explains part of the non-reproduction of older high-acquisition numbers. A
+method that moves `2/20 -> 4/20` on a context-correct-only set is not directly
+comparable to `0/20 -> 10/20` on a base-wrong/context-correct set.
+
+I added:
+
+```text
+--teacher-filter-require-baseline-wrong
+```
+
+to:
+
+```text
+scripts/minilang_intrinsic_continual.py
+scripts/minilang_continual_triangle.py
+scripts/screen_minilang_splits.py
+scripts/screen_raw_minilang_splits.py
+```
+
+and enabled it in `scripts/continual_benchmark_grid.py` common args for future
+standardized preset runs.
+
+Immediate implication: before drawing more conclusions from the current DICE,
+CAGE, or associative reruns, rerun the key baselines under the strict filter:
+
+1. associative layer20 raw;
+2. associative DICE `4+4` anti;
+3. raw relational;
+4. raw relational DICE `4+4` anti;
+5. Q-RICO key16.
+
+The scientific confidence should be downgraded for exact acquisition counts
+from the recent continual runs until this strict-filter rerun is complete.
