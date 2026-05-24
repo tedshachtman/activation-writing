@@ -8459,3 +8459,89 @@ Next benchmark step:
 The current strict Lyran fixture is useful for safety and brittleness analysis,
 but relational raw is not acquisition-positive on it, so it is not enough by
 itself to judge DICE as an acquisition-preserving method.
+
+## 2026-05-24: Strict Fixture, Raw-Positive 7-Layer Carrier
+
+The all-layer raw relational rerun on the strict fixture was not
+acquisition-positive, but the 7-layer local-gate carrier is. This matters
+because it gives DICE a real unsafe payload to preserve on the exact same
+frozen eval questions:
+
+```text
+runs/strict_fixture_lyran_seed1_candidates80_eval20/eval_questions.jsonl
+baseline 0/20, standard context 20/20
+layers 4,8,12,16,20,24,27
+```
+
+Results:
+
+| Method | Positive contexts | Edited | expanded c2w | before-correct drop | max drop | severe drops |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| relational raw 7-layer | standard `20/20` | `7/20` | `0` | `2.142` | `9.808` | `7` |
+| coordinate DICE `4+4` anti | diverse `9/20` | `2/20` | `0` | `0.089` | `0.585` | `0` |
+| key-effect DICE `4+4` anti | diverse `9/20` | `2/20` | `0` | `0.076` | `0.598` | `0` |
+| key-edge DICE `4+4` anti | diverse `9/20` | `2/20` | `0` | `0.083` | `0.605` | `0` |
+| key-edge DICE support-only | diverse `9/20` | `2/20` | `2` | `0.819` | `3.576` | `4` |
+| key-edge DICE + standard lessons as separate contexts | mixed `12/20` | `0/20` | `0` | `0.047` | `0.214` | `0` |
+| key-edge DICE + full standard context anchor | mixed `12/20` | `2/20` | `0` | `0.047` | `0.345` | `0` |
+| full-anchor key-edge support-only | mixed `12/20` | `2/20` | `1` | `0.299` | `1.417` | `2` |
+
+Implementation note: I added:
+
+```text
+--dice-include-standard-context
+--dice-include-standard-full-context
+```
+
+so DICE can include standard lessons as positive support contexts rather than
+replacing them with diverse variants.
+
+Interpretation:
+
+- The strict 7-layer raw carrier does acquire: `7/20` from a `0/20` baseline.
+  It is still unsafe by margin damage, even though expanded c2w is `0` on this
+  particular run.
+- DICE anti-support consistently preserves a small clean shard: `2/20`, `0`
+  c2w, low margin drop.
+- Key-effect and key-edge support spaces are much denser than raw-coordinate
+  DICE, but they do not recover more task accuracy. This weakens the simple
+  "raw coordinate sparsity is the only bottleneck" story.
+- Support-only key-edge gets no extra acquisition but reintroduces c2w. So
+  same-language support alone is not a clean acquisition coordinate; rival
+  anti-support is doing real safety work.
+- Including the raw full standard context as a DICE proposal does not restore
+  the `7/20` payload. The current maplet projection/gating itself drops most
+  threshold-bearing content.
+
+Current conclusion:
+
+```text
+DICE anti-support is a real safety/separation coordinate, not a complete
+acquisition coordinate.
+```
+
+The next DICE step should stop asking whether point/key/key-edge support is
+enough. It should inspect the `7/20 -> 2/20` lost items directly: compare raw
+and DICE logit deltas item-by-item, identify which answer margins survived, and
+ask whether the missing five items require candidate-specific components that
+are not invariant across current diverse contexts.
+
+Item-level diff on the strict 7-layer fixture:
+
+| idx | raw | DICE variants | Pattern |
+| ---: | ---: | ---: | --- |
+| `1` | correct | lost | big dog likes big bird |
+| `2` | correct | kept | big teacher saw small cat |
+| `4` | correct | lost | small dog saw big teacher |
+| `5` | correct | lost | big child likes small bird |
+| `7` | correct | lost | big child likes small teacher |
+| `14` | correct | kept | small teacher saw small cat |
+| `17` | correct | lost | small cat saw small child |
+
+So the clean DICE shard is not broad mini-language acquisition. It is closer to
+a narrow lexical/role island: `teacher saw cat`, invariant to the size modifier.
+The missing raw-acquired items include both `likes` items and other `saw`
+subject/object pairings. This points to the next coordinate: preserve
+compositional role coverage, not just high-support maplets. DICE is currently
+finding recurring shards, but threshold-bearing language acquisition requires a
+coverage-aware set of shards spanning verb/object/role combinations.

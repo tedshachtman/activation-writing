@@ -3356,3 +3356,74 @@ Takeaways:
 
 The next question is how to build a fixture ladder and only compare DICE/maplet
 variants on strict frozen fixtures where an unsafe carrier actually acquires.
+
+## Postscript 17: Raw-Positive Strict Fixture and DICE Maplet Results
+
+I found a raw-positive carrier on the same strict frozen Lyran fixture by using
+the 7-layer local-gate carrier:
+
+```text
+runs/strict_fixture_lyran_seed1_candidates80_eval20/eval_questions.jsonl
+baseline 0/20, standard context 20/20
+layers 4,8,12,16,20,24,27
+```
+
+Results:
+
+| Method | Positive contexts | Edited | expanded c2w | before-correct drop | max drop |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| relational raw 7-layer | standard `20/20` | `7/20` | `0` | `2.142` | `9.808` |
+| coordinate DICE `4+4` anti | diverse `9/20` | `2/20` | `0` | `0.089` | `0.585` |
+| key-effect DICE `4+4` anti | diverse `9/20` | `2/20` | `0` | `0.076` | `0.598` |
+| key-edge DICE `4+4` anti | diverse `9/20` | `2/20` | `0` | `0.083` | `0.605` |
+| key-edge DICE support-only | diverse `9/20` | `2/20` | `2` | `0.819` | `3.576` |
+| key-edge DICE + full standard context anchor | mixed `12/20` | `2/20` | `0` | `0.047` | `0.345` |
+| full-anchor key-edge support-only | mixed `12/20` | `2/20` | `1` | `0.299` | `1.417` |
+
+I added:
+
+```text
+--dice-include-standard-context
+--dice-include-standard-full-context
+```
+
+so DICE can include standard lessons as positive support contexts rather than
+replacing them with diverse variants.
+
+Interpretation:
+
+- Raw 7-layer relational is a real acquisition carrier on this fixture:
+  `7/20` from `0/20`.
+- DICE anti-support repeatedly extracts a small clean semantic shard:
+  `2/20`, `0` c2w, low margin damage.
+- Key-effect and key-edge support spaces are much denser than raw-coordinate
+  support, but still do not preserve more task accuracy.
+- Support-only key-edge does not recover acquisition and brings c2w back.
+- Including the raw full standard context as one positive proposal still stays
+  at `2/20`, so the current DICE support/projection coordinate is dropping most
+  of the raw threshold-bearing payload.
+
+Please reason from this sharper result. The next proposal should explain how to
+preserve the five raw-acquired-but-DICE-lost items while keeping the DICE safety
+benefit. In other words: DICE anti-support is a good separator, but current
+point/key/key-edge support is not yet the right acquisition coordinate.
+
+Item-level diff:
+
+```text
+raw correct / DICE lost:
+1  big dog likes big bird
+4  small dog saw big teacher
+5  big child likes small bird
+7  big child likes small teacher
+17 small cat saw small child
+
+raw correct / DICE kept:
+2  big teacher saw small cat
+14 small teacher saw small cat
+```
+
+This suggests the DICE shard is a narrow `teacher saw cat` island, invariant to
+size modifiers, rather than broad compositional language acquisition. Please
+focus on a mechanism that preserves coverage across verb/object/role
+combinations while retaining the rival-context anti-posture safety benefit.

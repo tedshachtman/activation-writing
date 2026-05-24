@@ -65,6 +65,16 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="Replace progressive same-format lessons with this many diverse renderings of the final task lesson.",
     )
+    parser.add_argument(
+        "--dice-include-standard-context",
+        action="store_true",
+        help="When DICE diverse contexts are enabled, also include the normal lesson sequence as positive support contexts.",
+    )
+    parser.add_argument(
+        "--dice-include-standard-full-context",
+        action="store_true",
+        help="When DICE diverse contexts are enabled, include the full normal lesson sequence as one positive support context.",
+    )
     parser.add_argument("--eval-questions", type=int, default=8)
     parser.add_argument(
         "--eval-questions-jsonl",
@@ -509,7 +519,23 @@ def main() -> None:
 
     for profile_idx, profile in enumerate(profiles):
         if args.dice_diverse_contexts > 0:
-            task_lessons = [
+            standard_full_context = (
+                "\n\n".join(
+                    render_task_lesson(profile, lesson_idx, args.lesson_examples, args.seed)
+                    for lesson_idx in range(args.lessons_per_task)
+                )
+                if args.dice_include_standard_full_context
+                else None
+            )
+            standard_lessons = (
+                [
+                    render_task_lesson(profile, lesson_idx, args.lesson_examples, args.seed)
+                    for lesson_idx in range(args.lessons_per_task)
+                ]
+                if args.dice_include_standard_context
+                else []
+            )
+            task_lessons = ([standard_full_context] if standard_full_context is not None else []) + standard_lessons + [
                 render_task_lesson_variant(
                     profile,
                     final_lesson_idx,

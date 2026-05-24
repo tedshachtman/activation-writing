@@ -3499,3 +3499,89 @@ not another purifier, but a **fixture ladder**:
 
 Then improve DICE's support coordinate only after we know the fixture has a
 payload to preserve.
+
+## Postscript 19: Raw-Positive Strict Fixture and DICE Maplet Results
+
+I reran the strict fixed Lyran fixture with the 7-layer local-gate carrier
+instead of all 28 layers. This carrier is raw-positive on the exact same frozen
+20 questions:
+
+```text
+runs/strict_fixture_lyran_seed1_candidates80_eval20/eval_questions.jsonl
+baseline 0/20, standard context 20/20
+layers 4,8,12,16,20,24,27
+```
+
+Results:
+
+| Method | Positive contexts | Edited | expanded c2w | before-correct drop | max drop |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| relational raw 7-layer | standard `20/20` | `7/20` | `0` | `2.142` | `9.808` |
+| coordinate DICE `4+4` anti | diverse `9/20` | `2/20` | `0` | `0.089` | `0.585` |
+| key-effect DICE `4+4` anti | diverse `9/20` | `2/20` | `0` | `0.076` | `0.598` |
+| key-edge DICE `4+4` anti | diverse `9/20` | `2/20` | `0` | `0.083` | `0.605` |
+| key-edge DICE support-only | diverse `9/20` | `2/20` | `2` | `0.819` | `3.576` |
+| key-edge DICE + full standard context anchor | mixed `12/20` | `2/20` | `0` | `0.047` | `0.345` |
+| full-anchor key-edge support-only | mixed `12/20` | `2/20` | `1` | `0.299` | `1.417` |
+
+I added two harness flags:
+
+```text
+--dice-include-standard-context
+--dice-include-standard-full-context
+```
+
+These let DICE include standard lessons as positive support contexts instead of
+replacing the standard lesson sequence with only diverse variants.
+
+Readout:
+
+- The raw 7-layer carrier really acquires on the strict frozen fixture:
+  `7/20` from base `0/20`.
+- DICE anti-support repeatedly gives a small clean shard: `2/20`, `0` c2w,
+  very low margin damage.
+- Key-effect and key-edge maplet spaces are denser and cleaner coordinates than
+  raw entries, but they do not recover more threshold-crossing acquisition.
+- Support-only key-edge does not improve acquisition and brings c2w back, so
+  rival anti-support is not merely overkill; it is doing actual safety work.
+- Including the raw full standard context as one positive DICE proposal does
+  not restore the raw `7/20` payload. The current support/projection coordinate
+  itself is losing most of the acquisition-bearing component.
+
+Updated diagnosis:
+
+```text
+DICE anti-support is a strong safety/separation principle, but the present
+point/key/key-edge support coordinates are not sufficient acquisition
+coordinates.
+```
+
+Next ask:
+
+Reason specifically about the lost raw payload. We need a method that compares
+the raw `7/20` carrier against the DICE `2/20` shard item-by-item and identifies
+what property the five lost answer flips have. The next coordinate may need to
+preserve candidate-specific answer-margin effects while still subtracting rival
+translation/posture effects, rather than requiring high support across all
+contexts.
+
+Item-level diff:
+
+```text
+raw correct / DICE lost:
+1  big dog likes big bird
+4  small dog saw big teacher
+5  big child likes small bird
+7  big child likes small teacher
+17 small cat saw small child
+
+raw correct / DICE kept:
+2  big teacher saw small cat
+14 small teacher saw small cat
+```
+
+So the DICE shard looks narrow: it preserves a `teacher saw cat` island
+invariant to size modifiers, not broad compositional language acquisition. The
+next idea should therefore not merely loosen the DICE threshold. It should ask
+how to preserve role/verb/object coverage while still using rival contexts to
+remove translation/posture contamination.
