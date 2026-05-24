@@ -3445,3 +3445,57 @@ the strict base-wrong/context-correct filter:
 3. raw relational;
 4. raw relational DICE `4+4` anti;
 5. Q-RICO key16.
+
+## Postscript 18: Strict Frozen-Fixture Rerun Completed
+
+I added `--eval-questions-jsonl` to the continual runner, built one strict
+fixed Lyran fixture, and reran the core methods on the exact same questions.
+
+Fixture:
+
+```text
+runs/strict_fixture_lyran_seed1_candidates80_eval20/eval_questions.jsonl
+baseline 0/20, standard context 20/20, eligible 47/80
+```
+
+Results:
+
+| Method | Context score in that run | Edited | expanded c2w | before-correct drop | max drop |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| associative layer20 raw | `20/20` | `4/20` | `3` | `3.166` | `11.906` |
+| associative DICE `4+4` anti | `9/20` | `0/20` | `0` | `0.025` | `0.131` |
+| relational raw all28 | `20/20` | `0/20` | `8` | `6.119` | `27.101` |
+| Q-RICO key16-style all28 | `20/20` | `4/20` | `2` | `3.502` | `10.752` |
+| relational DICE `4+4` anti all28 | `9/20` | `2/20` | `0` | `0.243` | `0.734` |
+
+Important caveat: for DICE runs, the before-write context score is measured
+with the joined diverse support contexts, not the standard fixture-building
+context. That is why DICE shows context `9/20`; the eval questions are fixed,
+but the DICE support contexts do not fully solve the standard-context fixture.
+
+Interpretation:
+
+- Fixed eval was necessary; previous shifting-filter comparisons were too noisy.
+- Associative raw still does not reproduce the historical `10-12/20`; in this
+  harness it is `4/20` and unsafe.
+- Q-RICO key16-style is not safe here (`2` c2w), so the old safe frontier needs
+  rerunning on the original CUDA/script settings before treating it as stable.
+- Relational raw is an unsafe no-acquisition run on this fixture (`0/20`, `8`
+  c2w), so this fixture is not raw-relational-positive.
+- Relational DICE anti-support is the interesting result: it gets `2/20` with
+  `0` c2w and low margin damage, even though its diverse support contexts only
+  solve `9/20` of the fixture. This suggests DICE is not merely inert, but it is
+  still too conservative.
+
+Next ask:
+
+Please reason from this stricter state. The next experiment should probably be
+not another purifier, but a **fixture ladder**:
+
+1. generate several strict frozen fixtures;
+2. raw-screen unsafe carriers on those fixtures;
+3. select fixtures where at least one unsafe carrier truly acquires;
+4. compare DICE/maplet variants on fixed raw-positive fixtures.
+
+Then improve DICE's support coordinate only after we know the fixture has a
+payload to preserve.

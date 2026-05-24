@@ -8368,3 +8368,94 @@ CAGE, or associative reruns, rerun the key baselines under the strict filter:
 
 The scientific confidence should be downgraded for exact acquisition counts
 from the recent continual runs until this strict-filter rerun is complete.
+
+### Strict Frozen-Fixture Rerun
+
+I added fixed eval-question support to `scripts/minilang_intrinsic_continual.py`:
+
+```text
+--eval-questions-jsonl PATH
+```
+
+This lets us build a strict fixture once and force raw, DICE, Q-RICO, and other
+methods to score the exact same questions. This matters because DICE diverse
+contexts can otherwise change which questions pass the context-teacher filter.
+
+Strict fixture:
+
+```text
+runs/strict_fixture_lyran_seed1_candidates80_eval20/eval_questions.jsonl
+```
+
+Selection:
+
+```text
+task Lyran, seed 1
+80 candidate questions
+require baseline wrong and standard full-context teacher correct
+select 20
+```
+
+Fixture check:
+
+| Baseline | Standard context | Eligible candidates |
+| ---: | ---: | ---: |
+| `0/20` | `20/20` | `47/80` |
+
+Rerun results on the exact same 20 questions:
+
+| Method | Context used for before-write teacher score | Edited | expanded c2w | before-correct drop | max drop |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| associative layer20 raw | `20/20` | `4/20` | `3` | `3.166` | `11.906` |
+| associative DICE `4+4` anti | `9/20` | `0/20` | `0` | `0.025` | `0.131` |
+| relational raw all28 | `20/20` | `0/20` | `8` | `6.119` | `27.101` |
+| Q-RICO key16-style all28 | `20/20` | `4/20` | `2` | `3.502` | `10.752` |
+| relational DICE `4+4` anti all28 | `9/20` | `2/20` | `0` | `0.243` | `0.734` |
+
+Notes:
+
+- For DICE runs, the "context used for before-write teacher score" is the
+  joined diverse support contexts, not the standard fixture-building context.
+  The edited no-context score is still comparable because the eval questions
+  are fixed. The diverse contexts only solve `9/20` of the standard-context
+  fixture, which means some of the fixture is not supported by the current DICE
+  renderings.
+- The old high-associative result still does not reproduce: strict fixture
+  associative raw is `4/20`, not `10-12/20`, and it is unsafe.
+- Q-RICO key16-style is not safe on this fixed MPS harness/settings: `4/20`
+  with `2` c2w and large margin drop. This weakens confidence in the exact old
+  Q-RICO frontier unless rerun on the original CUDA/script settings.
+- Relational raw is a pathological unsafe no-acquisition run on this fixture:
+  it gets `0/20` but still causes `8` expanded c2w.
+- Relational DICE anti-support is the most interesting strict-fixture result:
+  despite the diverse contexts only scoring `9/20`, it gets `2/20` closed-book
+  with `0` c2w and low margin drop. This is not strong language learning, but it
+  is a cleaner signal than prior raw-coordinate DICE looked under shifting eval
+  sets.
+
+Updated confidence:
+
+```text
+High confidence:
+- Fixed eval sets are required. Method comparisons without them are too noisy.
+- DICE anti-support consistently removes sentinel damage.
+- Raw-coordinate DICE is still very conservative.
+
+Medium confidence:
+- Relational DICE anti-support may preserve a small real semantic shard under
+  strict fixed evaluation.
+
+Low confidence:
+- Exact historical acquisition numbers remain comparable to current harness
+  numbers without rerunning the original script/settings on a frozen fixture.
+```
+
+Next benchmark step:
+
+1. Generate more strict frozen fixtures and raw-write screen them.
+2. Keep fixtures where an unsafe carrier actually acquires.
+3. Compare DICE/maplet candidates only on those fixed raw-positive fixtures.
+
+The current strict Lyran fixture is useful for safety and brittleness analysis,
+but relational raw is not acquisition-positive on it, so it is not enough by
+itself to judge DICE as an acquisition-preserving method.

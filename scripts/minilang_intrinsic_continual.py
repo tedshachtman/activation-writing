@@ -23,6 +23,7 @@ if str(ROOT) not in sys.path:
 
 from caic.modeling import clear_active_slot_weights, install_additive_memory, load_model_and_tokenizer
 from scripts.minilang_continual_triangle import (
+    TranslationQuestion,
     build_task_questions,
     evaluate_task_mc,
     release_device_cache,
@@ -65,6 +66,11 @@ def parse_args() -> argparse.Namespace:
         help="Replace progressive same-format lessons with this many diverse renderings of the final task lesson.",
     )
     parser.add_argument("--eval-questions", type=int, default=8)
+    parser.add_argument(
+        "--eval-questions-jsonl",
+        default="",
+        help="Optional fixed eval question JSONL. Rows may include task_idx; if provided, teacher filtering is skipped.",
+    )
     parser.add_argument("--teacher-filter-eval", action="store_true")
     parser.add_argument("--teacher-filter-candidates", type=int, default=120)
     parser.add_argument(
@@ -419,6 +425,41 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def load_eval_questions_jsonl(path: str, profiles) -> list[list[TranslationQuestion]]:
+    rows = [
+        json.loads(line)
+        for line in Path(path).read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    profile_sets: list[list[TranslationQuestion]] = []
+    multi_profile = len(profiles) > 1
+    for profile in profiles:
+        questions: list[TranslationQuestion] = []
+        for row in rows:
+            if "task_idx" in row and int(row["task_idx"]) != profile.idx:
+                continue
+            if "task_idx" not in row and multi_profile:
+                continue
+            answer_idx = row.get("answer_idx")
+            if answer_idx is None:
+                answer_letter = str(row["answer_letter"]).strip().upper()
+                answer_idx = "ABCD".index(answer_letter)
+            questions.append(
+                TranslationQuestion(
+                    sentence=str(row["sentence"]),
+                    answer=str(row["answer"]),
+                    options=[str(option) for option in row["options"]],
+                    answer_idx=int(answer_idx),
+                    category=str(row.get("category", "heldout_translation")),
+                )
+            )
+        profile_sets.append(questions)
+    if any(not questions for questions in profile_sets):
+        counts = [len(questions) for questions in profile_sets]
+        raise ValueError(f"Fixed eval question file {path} did not contain questions for all profiles: {counts}")
+    return profile_sets
+
+
 def write_config(args: argparse.Namespace, output_dir: Path) -> tuple[Path, Path, Path, Path, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "config.json").write_text(json.dumps(vars(args), indent=2, sort_keys=True), encoding="utf-8")
@@ -462,7 +503,11 @@ def main() -> None:
     contexts: list[str] = []
     eval_sets = []
     filter_stats: list[dict] = []
-    for profile in profiles:
+    fixed_eval_sets = load_eval_questions_jsonl(args.eval_questions_jsonl, profiles) if args.eval_questions_jsonl else None
+    if fixed_eval_sets is not None and args.teacher_filter_eval:
+        progress("fixed eval questions supplied; skipping teacher filtering")
+
+    for profile_idx, profile in enumerate(profiles):
         if args.dice_diverse_contexts > 0:
             task_lessons = [
                 render_task_lesson_variant(
@@ -519,16 +564,19 @@ def main() -> None:
                     "text": text,
                 },
             )
-        candidate_count = args.teacher_filter_candidates if args.teacher_filter_eval else args.eval_questions
-        eval_sets.append(
-            build_task_questions(
-                profile,
-                candidate_count,
-                args.seed + 91_000,
-                final_lesson_idx,
-                "heldout_translation",
+        if fixed_eval_sets is not None:
+            eval_sets.append(fixed_eval_sets[profile_idx])
+        else:
+            candidate_count = args.teacher_filter_candidates if args.teacher_filter_eval else args.eval_questions
+            eval_sets.append(
+                build_task_questions(
+                    profile,
+                    candidate_count,
+                    args.seed + 91_000,
+                    final_lesson_idx,
+                    "heldout_translation",
+                )
             )
-        )
 
     started = time.time()
     sentinels = sentinel_questions(args.sentinel_suite) if args.sentinel_eval else []
@@ -544,7 +592,7 @@ def main() -> None:
         for idx, detail in enumerate(sentinel_before["details"]):
             append_jsonl(details_path, {"stage": "sentinel_before", "step": -1, "idx": idx, **detail})
 
-    if args.teacher_filter_eval:
+    if args.teacher_filter_eval and fixed_eval_sets is None:
         for task_idx, profile in enumerate(profiles):
             candidates = eval_sets[task_idx]
             progress(f"teacher-filtering task={task_idx} language={profile.name} candidates={len(candidates)}")
@@ -601,6 +649,8 @@ def main() -> None:
                 "teacher_filter_candidates": len(eval_set),
                 "teacher_filter_correct": None,
                 "teacher_filter_selected": len(eval_set),
+                "teacher_filter_require_baseline_wrong": False,
+                "eval_questions_jsonl": args.eval_questions_jsonl,
             }
             for eval_set in eval_sets
         ]

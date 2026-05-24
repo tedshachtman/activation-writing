@@ -3312,3 +3312,47 @@ Please treat recent exact acquisition numbers as lower-confidence until the key
 baselines are rerun under the strict base-wrong/context-correct filter. The
 sentinel damage signals and DICE's safety-brake behavior are still meaningful,
 but method-to-method acquisition comparisons are less clean than assumed.
+
+## Postscript 16: Strict Frozen-Fixture Rerun
+
+I added fixed eval support:
+
+```text
+--eval-questions-jsonl PATH
+```
+
+Then I built:
+
+```text
+runs/strict_fixture_lyran_seed1_candidates80_eval20/eval_questions.jsonl
+baseline 0/20, standard context 20/20, 47/80 eligible
+```
+
+Core reruns on the exact same 20 questions:
+
+| Method | Context score in that run | Edited | expanded c2w | before-correct drop | max drop |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| associative layer20 raw | `20/20` | `4/20` | `3` | `3.166` | `11.906` |
+| associative DICE `4+4` anti | `9/20` | `0/20` | `0` | `0.025` | `0.131` |
+| relational raw all28 | `20/20` | `0/20` | `8` | `6.119` | `27.101` |
+| Q-RICO key16-style all28 | `20/20` | `4/20` | `2` | `3.502` | `10.752` |
+| relational DICE `4+4` anti all28 | `9/20` | `2/20` | `0` | `0.243` | `0.734` |
+
+Caveat: DICE runs use diverse support contexts for their context score, and
+those contexts only solve `9/20` of the fixture. The eval questions are fixed,
+but the DICE support contexts do not fully match the standard fixture-building
+context.
+
+Takeaways:
+
+- Fixed eval sets are mandatory.
+- The old high-associative result still does not reproduce in the current
+  harness.
+- Q-RICO key16-style is not safe here, so the old safe frontier is less stable
+  than assumed.
+- Relational raw is unsafe and non-acquiring on this fixture.
+- Relational DICE anti-support is the only clean positive shard here: `2/20`,
+  `0` c2w, low margin drop.
+
+The next question is how to build a fixture ladder and only compare DICE/maplet
+variants on strict frozen fixtures where an unsafe carrier actually acquires.
