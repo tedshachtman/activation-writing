@@ -8603,3 +8603,47 @@ Interpretation:
 - This supports the COVER-DICE diagnosis: the next method needs coverage-aware
   preservation of the raw acquisition carrier, not just stronger support voting
   or looser anti-support.
+
+## 2026-05-24: COVER-DICE v1 Facet-Effect Hook
+
+Implemented a first `facet_effect` DICE reducer:
+
+```text
+--dice-support-space facet_effect
+--dice-anchor-mode preserve_raw_effect
+--dice-facet-min-rank
+--dice-facet-max-rank
+--dice-anti-project-rank
+--dice-coverage-residual-cap
+--dice-coverage-equalize
+--dice-island-energy-cap
+--dice-final-fro-cap-ratio
+```
+
+This v1 uses target/effect facets rather than true visible-span lexical facets.
+It treats the first positive DICE proposal as the raw anchor, projects anchor
+facet effects away from rival anti-effect directions, optionally adds back a
+bounded anti-null residual, then reconstructs a down-projection update from
+facet-grouped anchor keys.
+
+Strict Lyran fixture results:
+
+| Method | Edited | expanded c2w | before-correct drop | max drop | Notes |
+| --- | ---: | ---: | ---: | ---: | --- |
+| raw relational 7-layer | `7/20` | `0` | `2.142` | `9.808` | unsafe margin damage |
+| key-edge full-anchor DICE anti | `2/20` | `0` | `0.047` | `0.345` | safe shard |
+| COVER-DICE facet v1, residual `.35`, no final cap | `0/20` | `1` | `0.246` | `1.988` | reconstruction amplified update, final Fro `8.97` |
+| COVER-DICE facet v1, residual `.15`, final cap `.15`, equalized | `0/20` | `0` | `0.037` | `0.228` | safe but inert |
+| COVER-DICE facet v1, residual `.15`, final cap `.15`, no equalizer | `0/20` | `0` | `0.044` | `0.301` | safe but inert |
+
+Interpretation:
+
+- The reducer hook works mechanically and is test-covered, but this target
+  coordinate is not the missing coverage object.
+- Without a final Frobenius cap, facet reconstruction can amplify the anchor and
+  reintroduce c2w without acquisition.
+- With a conservative cap, it becomes safe but loses even the old `2/20` DICE
+  shard.
+- This falsifies the cheap target/effect-facet approximation of COVER-DICE. The
+  next version needs real visible-span/role facets or item-conditioned margin
+  diagnostics, not just target-SVD facet grouping.

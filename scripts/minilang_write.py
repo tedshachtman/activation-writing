@@ -1643,6 +1643,14 @@ def dice_support_consensus_update(
     anti_threshold: float = 0.50,
     anti_temperature: float = 12.0,
     anti_strength: float = 1.0,
+    anchor_mode: str = "vote",
+    facet_min_rank: int = 1,
+    facet_max_rank: int = 3,
+    anti_project_rank: int = 4,
+    coverage_residual_cap: float = 0.0,
+    coverage_equalize: bool = False,
+    island_energy_cap: float = 0.0,
+    final_fro_cap_ratio: float = 0.0,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     """High-support consensus across diverse contexts.
 
@@ -1797,6 +1805,227 @@ def dice_support_consensus_update(
             ).float().mean(dim=0)
         else:
             anti_same = torch.zeros_like(support)
+    elif support_space == "facet_effect":
+        if not key_sets or not target_sets:
+            raise ValueError("facet_effect DICE support requires key_sets and target_sets")
+        if anchor_mode != "preserve_raw_effect":
+            raise ValueError("facet_effect currently requires --dice-anchor-mode preserve_raw_effect")
+        pooled_targets = torch.cat(
+            [targets.detach().float().cpu() for targets in target_sets if targets.numel() > 0],
+            dim=0,
+        )
+        target_pool_rows = int(pooled_targets.shape[0])
+        if pooled_targets.numel() == 0:
+            raise ValueError("facet_effect DICE support received empty target_sets")
+        cap = int(effect_key_cap)
+        if cap > 0 and pooled_targets.shape[0] > cap:
+            idx = torch.linspace(0, pooled_targets.shape[0] - 1, cap, dtype=torch.long)
+            pooled_targets = pooled_targets.index_select(0, idx)
+        pooled_targets = pooled_targets / torch.linalg.vector_norm(
+            pooled_targets,
+            dim=1,
+            keepdim=True,
+        ).clamp_min(1e-12)
+        rank = max(1, min(int(effect_rank), pooled_targets.shape[0], pooled_targets.shape[1]))
+        _u, singular_values, vh = torch.linalg.svd(pooled_targets, full_matrices=False)
+        projected = pooled_targets @ vh[:rank].T
+        selected: list[int] = []
+        first = int(
+            torch.argmax(
+                torch.linalg.vector_norm(
+                    projected - projected.mean(dim=0, keepdim=True),
+                    dim=1,
+                )
+            ).item()
+        )
+        selected.append(first)
+        min_dist = torch.cdist(projected[first : first + 1], projected).squeeze(0)
+        while len(selected) < rank:
+            next_idx = int(torch.argmax(min_dist).item())
+            if next_idx in selected:
+                break
+            selected.append(next_idx)
+            dist = torch.cdist(projected[next_idx : next_idx + 1], projected).squeeze(0)
+            min_dist = torch.minimum(min_dist, dist)
+        prototypes = pooled_targets.index_select(0, torch.tensor(selected, dtype=torch.long))
+        actual_rank = int(prototypes.shape[0])
+
+        def grouped_keys(keys: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+            keys_f = keys.detach().float().cpu()
+            targets_f = targets.detach().float().cpu()
+            targets_f = targets_f / torch.linalg.vector_norm(targets_f, dim=1, keepdim=True).clamp_min(1e-12)
+            sim = (targets_f @ prototypes.T).clamp_min(0.0).square()
+            denom = sim.sum(dim=0).clamp_min(1e-12)
+            grouped = sim.T @ keys_f / denom.unsqueeze(1)
+            return grouped / torch.linalg.vector_norm(grouped, dim=1, keepdim=True).clamp_min(1e-12)
+
+        grouped_positive = torch.stack(
+            [grouped_keys(keys, targets) for keys, targets in zip(key_sets, target_sets, strict=True)],
+            dim=0,
+        )
+        anchor_keys = grouped_positive[0].contiguous()
+        effects = torch.einsum("cgm,cdm->cgd", grouped_positive, stack)
+        anchor_effect = effects[0]
+        positive_effects = effects[1:] if effects.shape[0] > 1 else effects
+        if anti_updates:
+            anti_stack = torch.stack([update.detach().float().cpu() for update in anti_updates], dim=0)
+            if anti_key_sets and anti_target_sets and len(anti_key_sets) == len(anti_updates):
+                grouped_anti = torch.stack(
+                    [
+                        grouped_keys(keys, targets)
+                        for keys, targets in zip(anti_key_sets, anti_target_sets, strict=True)
+                    ],
+                    dim=0,
+                )
+                anti_effects = torch.einsum("cgm,cdm->cgd", grouped_anti, anti_stack)
+            else:
+                anti_effects = torch.einsum("gm,cdm->cgd", anchor_keys, anti_stack)
+        else:
+            anti_effects = torch.empty(0, anchor_effect.shape[0], anchor_effect.shape[1])
+
+        def row_basis(rows: torch.Tensor, max_rank: int, *, center: bool = False) -> torch.Tensor:
+            rows = rows.detach().float()
+            rows = rows[torch.linalg.vector_norm(rows, dim=1) > 1e-8]
+            if rows.numel() == 0 or max_rank <= 0:
+                return torch.empty(0, anchor_effect.shape[1])
+            if center and rows.shape[0] > 1:
+                rows = rows - rows.mean(dim=0, keepdim=True)
+            if torch.linalg.vector_norm(rows).item() <= 1e-8:
+                return torch.empty(0, anchor_effect.shape[1])
+            _u_b, _s_b, vh_b = torch.linalg.svd(rows, full_matrices=False)
+            keep = max(1, min(int(max_rank), vh_b.shape[0]))
+            return vh_b[:keep].contiguous()
+
+        final_effect_rows: list[torch.Tensor] = []
+        support_values: list[torch.Tensor] = []
+        anti_leaks: list[torch.Tensor] = []
+        semantic_ranks: list[float] = []
+        anti_ranks: list[float] = []
+        raw_perp_energy = 0.0
+        support_energy = 0.0
+        residual_energy = 0.0
+        for facet_idx in range(anchor_effect.shape[0]):
+            raw_vec = anchor_effect[facet_idx]
+            anti_basis = row_basis(anti_effects[:, facet_idx, :], int(anti_project_rank), center=False)
+            anti_ranks.append(float(anti_basis.shape[0]))
+            if anti_basis.numel() > 0:
+                anti_projection = raw_vec @ anti_basis.T @ anti_basis
+                raw_perp = raw_vec - anti_projection
+                anti_leak = torch.linalg.vector_norm(anti_projection) / torch.linalg.vector_norm(raw_vec).clamp_min(1e-12)
+                pos_perp = positive_effects[:, facet_idx, :] - (positive_effects[:, facet_idx, :] @ anti_basis.T) @ anti_basis
+            else:
+                raw_perp = raw_vec
+                anti_leak = torch.zeros(())
+                pos_perp = positive_effects[:, facet_idx, :]
+            semantic_basis = row_basis(pos_perp, int(facet_max_rank), center=True)
+            min_rank = max(0, min(int(facet_min_rank), pos_perp.shape[0], pos_perp.shape[1]))
+            if semantic_basis.shape[0] < min_rank:
+                fallback = row_basis(pos_perp + 1e-6 * raw_perp.unsqueeze(0), min_rank, center=False)
+                semantic_basis = fallback if fallback.shape[0] > semantic_basis.shape[0] else semantic_basis
+            semantic_ranks.append(float(semantic_basis.shape[0]))
+            if semantic_basis.numel() > 0:
+                supported = raw_perp @ semantic_basis.T @ semantic_basis
+                support_cos = torch.dot(raw_perp, supported) / (
+                    torch.linalg.vector_norm(raw_perp).clamp_min(1e-12)
+                    * torch.linalg.vector_norm(supported).clamp_min(1e-12)
+                )
+            else:
+                supported = torch.zeros_like(raw_vec)
+                support_cos = torch.zeros(())
+            residual = raw_perp - supported
+            residual_scale = max(0.0, min(float(coverage_residual_cap), 1.0))
+            final_vec = supported + residual_scale * residual
+            final_effect_rows.append(final_vec)
+            support_values.append(support_cos.clamp(min=0.0, max=1.0).reshape(()))
+            anti_leaks.append(anti_leak.reshape(()))
+            raw_perp_energy += float(raw_perp.square().sum().item())
+            support_energy += float(supported.square().sum().item())
+            residual_energy += float((residual_scale * residual).square().sum().item())
+        final_effect = torch.stack(final_effect_rows, dim=0)
+        if coverage_equalize and final_effect.numel() > 0:
+            norms = torch.linalg.vector_norm(final_effect, dim=1)
+            active = norms > 1e-8
+            if bool(active.any()):
+                target_norm = norms[active].median().clamp_min(1e-8)
+                scales = (target_norm / norms.clamp_min(1e-8)).clamp(0.25, 4.0)
+                final_effect = final_effect * torch.where(active, scales, torch.ones_like(scales)).unsqueeze(1)
+        if island_energy_cap > 0.0 and final_effect.numel() > 0:
+            norms = torch.linalg.vector_norm(final_effect, dim=1)
+            total = norms.square().sum().clamp_min(1e-12)
+            max_norm = torch.sqrt(total * min(max(float(island_energy_cap), 0.0), 1.0)).clamp_min(1e-12)
+            scales = torch.minimum(torch.ones_like(norms), max_norm / norms.clamp_min(1e-12))
+            final_effect = final_effect * scales.unsqueeze(1)
+        gram = anchor_keys @ anchor_keys.T
+        ridge_eye = torch.eye(gram.shape[0], dtype=gram.dtype) * max(float(effect_ridge), 0.0)
+        coeff = torch.linalg.solve(gram + ridge_eye, final_effect)
+        final_update = (anchor_keys.T @ coeff).T.contiguous()
+        mean_coeff_effect = torch.linalg.solve(gram + ridge_eye, anchor_effect)
+        mean_map = (anchor_keys.T @ mean_coeff_effect).T.contiguous()
+        norms = torch.linalg.vector_norm(flat, dim=1)
+        raw_final_fro = torch.linalg.vector_norm(final_update).clamp_min(1e-12)
+        cap_ratio = max(float(final_fro_cap_ratio), 0.0)
+        if cap_ratio > 0.0:
+            cap_norm = norms[0].clamp_min(1e-12) * cap_ratio
+            if raw_final_fro > cap_norm:
+                final_update = final_update * (cap_norm / raw_final_fro)
+        support = torch.stack(support_values) if support_values else torch.zeros(1)
+        anti_same = torch.stack(anti_leaks) if anti_leaks else torch.zeros_like(support)
+        gate = torch.linalg.vector_norm(final_effect, dim=1) / torch.linalg.vector_norm(anchor_effect, dim=1).clamp_min(1e-12)
+        anti_gate = 1.0 - anti_same.clamp(0.0, 1.0)
+        stats = {
+            "dice_context_count": float(len(updates)),
+            "dice_anti_context_count": float(len(anti_updates)),
+            "dice_support_space_is_svd": 0.0,
+            "dice_support_space_is_column": 0.0,
+            "dice_support_space_is_key_effect": 0.0,
+            "dice_support_space_is_key_edge_effect": 0.0,
+            "dice_support_space_is_target_group_effect": 0.0,
+            "dice_support_space_is_facet_effect": 1.0,
+            "dice_anchor_mode_preserve_raw_effect": 1.0,
+            "dice_subspace_rank": float(actual_rank),
+            "dice_subspace_energy_fraction": float((singular_values[:rank].square().sum() / singular_values.square().sum().clamp_min(1e-12)).item()),
+            "dice_effect_key_pool_rows": 0.0,
+            "dice_effect_target_pool_rows": float(target_pool_rows),
+            "dice_effect_rank": float(effect_rank),
+            "dice_effect_ridge": float(effect_ridge),
+            "dice_support_threshold": float(support_threshold),
+            "dice_support_temperature": float(support_temperature),
+            "dice_support_strength": float(support_strength),
+            "dice_support_cap": float(support_cap),
+            "dice_support_floor": float(support_floor),
+            "dice_anti_threshold": float(anti_threshold),
+            "dice_anti_temperature": float(anti_temperature),
+            "dice_anti_strength": float(anti_strength),
+            "dice_anti_same_mean": float(anti_same.mean().item()),
+            "dice_anti_same_p90": float(torch.quantile(anti_same.flatten(), 0.90).item()),
+            "dice_anti_gate_mean": float(anti_gate.mean().item()),
+            "dice_mean_support": float(support.mean().item()),
+            "dice_support_p90": float(torch.quantile(support.flatten(), 0.90).item()),
+            "dice_support_p99": float(torch.quantile(support.flatten(), 0.99).item()),
+            "dice_gate_mean": float(gate.mean().item()),
+            "dice_gate_p90": float(torch.quantile(gate.flatten(), 0.90).item()),
+            "dice_gate_p99": float(torch.quantile(gate.flatten(), 0.99).item()),
+            "dice_high_support_fraction": float((support >= float(support_threshold)).float().mean().item()),
+            "dice_mean_update_fro": float(norms.mean().item()),
+            "dice_mean_update_fro_std": float(norms.std(unbiased=False).item()),
+            "dice_mean_map_fro": float(torch.linalg.vector_norm(mean_map).item()),
+            "dice_final_update_fro": float(torch.linalg.vector_norm(final_update).item()),
+            "dice_raw_final_update_fro": float(raw_final_fro.item()),
+            "dice_final_fro_cap_ratio": float(final_fro_cap_ratio),
+            "dice_facet_min_rank": float(facet_min_rank),
+            "dice_facet_max_rank": float(facet_max_rank),
+            "dice_facet_semantic_rank_mean": float(sum(semantic_ranks) / max(len(semantic_ranks), 1)),
+            "dice_facet_anti_rank_mean": float(sum(anti_ranks) / max(len(anti_ranks), 1)),
+            "dice_anti_project_rank": float(anti_project_rank),
+            "dice_coverage_residual_cap": float(coverage_residual_cap),
+            "dice_coverage_equalize": 1.0 if coverage_equalize else 0.0,
+            "dice_island_energy_cap": float(island_energy_cap),
+            "dice_facet_raw_perp_energy": float(raw_perp_energy),
+            "dice_facet_support_energy": float(support_energy),
+            "dice_facet_residual_energy": float(residual_energy),
+        }
+        stats.update(proposal_alignment_stats([update.detach().float().cpu() for update in updates]))
+        return final_update.contiguous(), stats
     elif support_space == "target_group_effect":
         if not key_sets or not target_sets:
             raise ValueError("target_group_effect DICE support requires key_sets and target_sets")
@@ -3013,13 +3242,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dice-defer-apply", action="store_true")
     parser.add_argument(
         "--dice-support-space",
-        choices=["coordinate", "column", "key_effect", "key_edge_effect", "target_group_effect", "svd"],
+        choices=["coordinate", "column", "key_effect", "key_edge_effect", "target_group_effect", "facet_effect", "svd"],
         default="coordinate",
     )
+    parser.add_argument("--dice-anchor-mode", choices=["vote", "preserve_raw_effect"], default="vote")
     parser.add_argument("--dice-subspace-rank", type=int, default=8)
     parser.add_argument("--dice-effect-rank", type=int, default=64)
     parser.add_argument("--dice-effect-key-cap", type=int, default=1024)
     parser.add_argument("--dice-effect-ridge", type=float, default=1e-3)
+    parser.add_argument("--dice-facet-min-rank", type=int, default=1)
+    parser.add_argument("--dice-facet-max-rank", type=int, default=3)
+    parser.add_argument("--dice-anti-project-rank", type=int, default=4)
+    parser.add_argument("--dice-coverage-residual-cap", type=float, default=0.0)
+    parser.add_argument("--dice-coverage-equalize", action="store_true")
+    parser.add_argument("--dice-island-energy-cap", type=float, default=0.0)
+    parser.add_argument("--dice-final-fro-cap-ratio", type=float, default=0.0)
     parser.add_argument("--dice-support-threshold", type=float, default=0.75)
     parser.add_argument("--dice-support-temperature", type=float, default=16.0)
     parser.add_argument("--dice-support-strength", type=float, default=1.0)
@@ -5206,6 +5443,14 @@ def run_intrinsic_surprise_writes(
                 anti_threshold=args.dice_anti_threshold,
                 anti_temperature=args.dice_anti_temperature,
                 anti_strength=args.dice_anti_strength,
+                anchor_mode=args.dice_anchor_mode,
+                facet_min_rank=args.dice_facet_min_rank,
+                facet_max_rank=args.dice_facet_max_rank,
+                anti_project_rank=args.dice_anti_project_rank,
+                coverage_residual_cap=args.dice_coverage_residual_cap,
+                coverage_equalize=bool(args.dice_coverage_equalize),
+                island_energy_cap=args.dice_island_energy_cap,
+                final_fro_cap_ratio=args.dice_final_fro_cap_ratio,
             )
             wrappers[layer_idx].add_memory_(final_update, slot_id=slot_id)
             append_jsonl(

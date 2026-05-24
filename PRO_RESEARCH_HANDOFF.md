@@ -3621,3 +3621,33 @@ Task1 did receive a real DICE update: mean final Fro was `0.528` versus task0
 `0.592`, with similar support/anti gates. So Vomar failure is not simply “no
 write happened.” The present DICE coordinate remains a safe narrow-shard
 consolidator, not a multi-language sequential learner.
+
+## Postscript 21: COVER-DICE v1 Negative Result
+
+Implemented a first `facet_effect` reducer:
+
+```text
+--dice-support-space facet_effect
+--dice-anchor-mode preserve_raw_effect
+--dice-coverage-residual-cap
+--dice-final-fro-cap-ratio
+```
+
+This version uses target/effect facets, not true visible-span role facets. It
+projects the raw anchor's grouped effects away from rival anti-effect directions
+and reconstructs the update from facet-grouped anchor keys.
+
+Strict Lyran results:
+
+| Method | Edited | c2w | drop | max drop |
+| --- | ---: | ---: | ---: | ---: |
+| raw relational 7-layer | `7/20` | `0` | `2.142` | `9.808` |
+| key-edge full-anchor DICE anti | `2/20` | `0` | `0.047` | `0.345` |
+| facet v1, residual `.35`, uncapped | `0/20` | `1` | `0.246` | `1.988` |
+| facet v1, residual `.15`, cap `.15`, equalized | `0/20` | `0` | `0.037` | `0.228` |
+| facet v1, residual `.15`, cap `.15`, no equalizer | `0/20` | `0` | `0.044` | `0.301` |
+
+Conclusion: the implementation hook works, but target-SVD/effect facets are not
+the missing coverage object. Capping makes it safe and inert; uncapped
+reconstruction can reintroduce c2w without acquisition. Next version needs real
+visible-span/role facets, not target-SVD facet grouping.

@@ -174,6 +174,35 @@ def test_dice_anti_support_suppresses_rival_shared_coordinate():
     assert abs(with_anti[0, 0]) < abs(without_anti[0, 0])
 
 
+def test_dice_facet_effect_preserves_anti_null_anchor_facets():
+    anchor = torch.tensor([[1.0, 0.0], [0.0, 1.0]])
+    support = torch.tensor([[0.9, 0.0], [0.0, 1.1]])
+    anti = torch.tensor([[1.0, 0.0], [0.0, 0.0]])
+    keys = [torch.eye(2), torch.eye(2)]
+    targets = [torch.eye(2), torch.eye(2)]
+    anti_keys = [torch.eye(2)]
+    anti_targets = [torch.eye(2)]
+
+    final, stats = dice_support_consensus_update(
+        [anchor, support],
+        anti_updates=[anti],
+        key_sets=keys,
+        anti_key_sets=anti_keys,
+        target_sets=targets,
+        anti_target_sets=anti_targets,
+        support_space="facet_effect",
+        anchor_mode="preserve_raw_effect",
+        effect_rank=2,
+        anti_project_rank=1,
+        coverage_residual_cap=1.0,
+        support_strength=0.0,
+    )
+
+    assert stats["dice_support_space_is_facet_effect"] == 1.0
+    assert abs(final[0, 0]) < 0.1
+    assert final[1, 1] > 0.5
+
+
 def test_diverse_task_lesson_variants_change_surface_frame():
     profile = task_profile(0)
     variants = [

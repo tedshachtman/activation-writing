@@ -196,13 +196,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dice-defer-apply", action="store_true")
     parser.add_argument(
         "--dice-support-space",
-        choices=["coordinate", "column", "key_effect", "key_edge_effect", "target_group_effect", "svd"],
+        choices=["coordinate", "column", "key_effect", "key_edge_effect", "target_group_effect", "facet_effect", "svd"],
         default="coordinate",
     )
+    parser.add_argument("--dice-anchor-mode", choices=["vote", "preserve_raw_effect"], default="vote")
     parser.add_argument("--dice-subspace-rank", type=int, default=8)
     parser.add_argument("--dice-effect-rank", type=int, default=64)
     parser.add_argument("--dice-effect-key-cap", type=int, default=1024)
     parser.add_argument("--dice-effect-ridge", type=float, default=1e-3)
+    parser.add_argument("--dice-facet-min-rank", type=int, default=1)
+    parser.add_argument("--dice-facet-max-rank", type=int, default=3)
+    parser.add_argument("--dice-anti-project-rank", type=int, default=4)
+    parser.add_argument("--dice-coverage-residual-cap", type=float, default=0.0)
+    parser.add_argument("--dice-coverage-equalize", action="store_true")
+    parser.add_argument("--dice-island-energy-cap", type=float, default=0.0)
+    parser.add_argument("--dice-final-fro-cap-ratio", type=float, default=0.0)
     parser.add_argument("--dice-support-threshold", type=float, default=0.75)
     parser.add_argument("--dice-support-temperature", type=float, default=16.0)
     parser.add_argument("--dice-support-strength", type=float, default=1.0)
