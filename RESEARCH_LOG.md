@@ -8545,3 +8545,61 @@ subject/object pairings. This points to the next coordinate: preserve
 compositional role coverage, not just high-support maplets. DICE is currently
 finding recurring shards, but threshold-bearing language acquisition requires a
 coverage-aware set of shards spanning verb/object/role combinations.
+
+## 2026-05-24: Strict Two-Task DICE Check
+
+Built a strict frozen two-task fixture:
+
+```text
+runs/strict_fixture_lyran_vomar_seed1_candidates80_eval20/eval_questions.jsonl
+```
+
+Both tasks are acquisition-informative under the standard context:
+
+| Task | Baseline | Standard context | Eligible candidates |
+| --- | ---: | ---: | ---: |
+| Lyran | `0/20` | `20/20` | `47/80` |
+| Vomar | `0/20` | `20/20` | `26/80` |
+
+Then ran sequential key-edge DICE with full standard context anchor and rival
+anti-support:
+
+```text
+runs/strict_twotask_dice_key_edge_fullanchor_anti_layers7_eval20
+layers 4,8,12,16,20,24,27
+no old-key negatives, no sidecar state
+task1 receives only task0-updated weights
+```
+
+Before-write context scores in the DICE run are lower because they use the
+mixed DICE positive contexts, not the standard fixture-building context:
+
+| Task | DICE-context score |
+| --- | ---: |
+| Lyran | `12/20` |
+| Vomar | `11/20` |
+
+Sequential result:
+
+| Stage | Lyran | Vomar | expanded c2w | before-correct drop | max drop |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| after task0 | `2/20` | n/a | `0` | `0.047` | `0.345` |
+| after task1 | `2/20` | `0/20` | `0` | `0.122` | `0.385` |
+
+DICE update diagnostics:
+
+| Write | mean final Fro | mean gate | mean anti gate | high-support fraction |
+| --- | ---: | ---: | ---: | ---: |
+| task0 | `0.592` | `0.089` | `0.270` | `0.562` |
+| task1 | `0.528` | `0.080` | `0.240` | `0.581` |
+
+Interpretation:
+
+- The safe DICE shard is retained across a second write.
+- Sentinel remains clean after both writes.
+- But the second language does not acquire at all, despite receiving a similar
+  update norm and gate profile. So the current key-edge/full-anchor DICE is not
+  a sequential learner; it is a safe narrow-shard consolidator.
+- This supports the COVER-DICE diagnosis: the next method needs coverage-aware
+  preservation of the raw acquisition carrier, not just stronger support voting
+  or looser anti-support.

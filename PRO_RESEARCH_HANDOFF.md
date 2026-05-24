@@ -3585,3 +3585,39 @@ invariant to size modifiers, not broad compositional language acquisition. The
 next idea should therefore not merely loosen the DICE threshold. It should ask
 how to preserve role/verb/object coverage while still using rival contexts to
 remove translation/posture contamination.
+
+## Postscript 20: Strict Two-Task DICE Check
+
+Built:
+
+```text
+runs/strict_fixture_lyran_vomar_seed1_candidates80_eval20/eval_questions.jsonl
+```
+
+Fixture quality:
+
+| Task | Baseline | Standard context | Eligible candidates |
+| --- | ---: | ---: | ---: |
+| Lyran | `0/20` | `20/20` | `47/80` |
+| Vomar | `0/20` | `20/20` | `26/80` |
+
+Sequential run:
+
+```text
+runs/strict_twotask_dice_key_edge_fullanchor_anti_layers7_eval20
+key-edge DICE, full standard context anchor, 4 rival anti contexts
+no old-key negatives or sidecar state
+task1 receives only task0-updated weights
+```
+
+Result:
+
+| Stage | Lyran | Vomar | expanded c2w | before-correct drop | max drop |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| after task0 | `2/20` | n/a | `0` | `0.047` | `0.345` |
+| after task1 | `2/20` | `0/20` | `0` | `0.122` | `0.385` |
+
+Task1 did receive a real DICE update: mean final Fro was `0.528` versus task0
+`0.592`, with similar support/anti gates. So Vomar failure is not simply “no
+write happened.” The present DICE coordinate remains a safe narrow-shard
+consolidator, not a multi-language sequential learner.

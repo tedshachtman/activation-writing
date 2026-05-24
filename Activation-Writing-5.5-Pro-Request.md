@@ -3427,3 +3427,31 @@ This suggests the DICE shard is a narrow `teacher saw cat` island, invariant to
 size modifiers, rather than broad compositional language acquisition. Please
 focus on a mechanism that preserves coverage across verb/object/role
 combinations while retaining the rival-context anti-posture safety benefit.
+
+## Postscript 18: Strict Two-Task DICE Check
+
+Built a strict frozen two-task fixture:
+
+```text
+runs/strict_fixture_lyran_vomar_seed1_candidates80_eval20/eval_questions.jsonl
+```
+
+Both tasks are strict acquisition fixtures:
+
+| Task | Baseline | Standard context | Eligible candidates |
+| --- | ---: | ---: | ---: |
+| Lyran | `0/20` | `20/20` | `47/80` |
+| Vomar | `0/20` | `20/20` | `26/80` |
+
+Sequential key-edge/full-anchor DICE result, with no old-key negatives or
+sidecar state:
+
+| Stage | Lyran | Vomar | expanded c2w | before-correct drop | max drop |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| after task0 | `2/20` | n/a | `0` | `0.047` | `0.345` |
+| after task1 | `2/20` | `0/20` | `0` | `0.122` | `0.385` |
+
+Task1 got a similar DICE update norm to task0, so this is not just an absent
+write. Current DICE safely retains the Lyran shard but does not acquire Vomar.
+This strengthens the case for COVER-DICE or another coverage-preserving method:
+the current coordinate is safe but too narrow for sequential language learning.
