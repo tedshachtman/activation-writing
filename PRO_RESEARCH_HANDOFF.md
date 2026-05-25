@@ -4048,3 +4048,90 @@ separator with a stronger contrastive/functional coordinate:
   coordinate, not raw entries;
 - or transported graph-value quotients that remove generic row-pattern x
   downstream-posture effects while preserving object row-pattern effects.
+
+## Postscript 29: Contrastive Key-Effect And ORCA Residual Retest
+
+Tested the next separator idea directly in the teacher-valid micro benchmark:
+
+```text
+teacher/eval context: standard 6 lessons, context = 20/20
+positive write contexts: 20 = 6 standard + 14 extra variants
+rival anti-contexts: 14 same-format rival-language variants
+layers: 4,8,12,16,20,24,27
+```
+
+### Key-effect DICE separator
+
+Runs:
+
+```text
+runs/teacher6_extra14_dice_keyeffect_anti14_s020_eval20
+runs/teacher6_extra14_dice_keyeffect_relaxed_anti14_s020_eval20
+```
+
+Results:
+
+| Method | Edited | c2w | drop | max drop | final Fro/layer |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| key-effect DICE strict | `0/20` | `0` | `0.012` | `0.081` | `0.009` |
+| key-effect DICE relaxed | `0/20` | `0` | `0.035` | `0.120` | `0.056` |
+
+Conclusion: key-effect contrast is a real safety coordinate, but it is inert in
+this setup. It is too sparse or too conservative to carry the threshold payload.
+
+### ORCA residual-only retest
+
+Old high-acquisition run:
+
+```text
+runs/relagg_orca_r16_soft_residualonly_s010_out256w10_in256w20_qwen17_auto
+```
+
+Old result:
+
+| Run | Edited | c2w | drop | max drop | Layers | Scale/cap |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| old ORCA residual-only | `9/20` | `2` | `1.287` | `5.814` | all `28` | `.10`, cap `50` |
+
+That old result did not fail to reproduce under identical conditions. The
+current benchmark differs materially:
+
+- old fixture:
+  `runs/modal_minilang_teacher_filtered_6lesson_ex8_cand80_eval20_qwen17_cuda/eval_questions.jsonl`;
+- current fixture:
+  `runs/strict_fixture_lyran_seed1_candidates80_eval20/eval_questions.jsonl`;
+- old source tokens are the older unprefixed form (`vek/soka/palo`), while the
+  current strict fixture uses prefixed tokens (`lyvek/lysoka/lypalo`);
+- old run used all 28 layers, 6 lessons, scale `.10`, cap `50`;
+- current micro retest uses 7 layers, 20 write contexts, scale `.02` or `.01`,
+  cap `.75`.
+
+Teacher-valid micro retest:
+
+| Method | Edited | c2w | drop | max drop | mean update Fro | ORCA signal retention |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| ORCA residual-only `.02` | `1/20` | `2` | `1.408` | `6.076` | `0.569` | `0.017` |
+| ORCA residual-only `.01` | `1/20` | `2` | `0.983` | `3.765` | `0.446` | `0.008` |
+
+Both current ORCA runs recover only item `14`:
+
+```text
+the small teacher saw the small cat.
+```
+
+Interpretation:
+
+- ORCA residual-only's old high acquisition was probably tied to the large
+  all-layer residual map and older/easier fixture, not to a robust separator
+  that transfers into the slow micro regime.
+- In the teacher-valid micro benchmark, ORCA residual-only under-acquires and
+  remains unsafe.
+- Keep the conceptual lesson from ORCA: the live acquisition payload can live
+  outside neat projected atom bases. But do not use ORCA residual-only itself as
+  the next micro separator.
+
+Next best target:
+
+Build a less sparse contrastive separator over **functional maplets**: small
+role/key neighborhoods mapped to effect neighborhoods, supported across
+same-language contexts and suppressed by same-format rival-language contexts.

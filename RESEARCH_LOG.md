@@ -9460,3 +9460,118 @@ Next direction:
   - or downstream transported graph-value quotients that penalize generic
     row-pattern x downstream-posture effect while preserving object row-pattern
     effects.
+
+## 2026-05-25: Contrastive Separator And ORCA Residual Retest
+
+Tested the next separator intuition in the teacher-valid micro benchmark:
+
+```text
+teacher/eval context: standard 6 lessons, context = 20/20
+positive write contexts: 20 = 6 standard + 14 extra variants
+rival anti-contexts: 14 same-format rival-language variants
+layers: 4,8,12,16,20,24,27
+```
+
+The idea was to use the raw relational/context-value proposals as the carrier,
+but make the separator contrastive:
+
+```text
+same-language positives ~= language semantics + posture
+rival-language anti     ~= different semantics + posture
+semantic separator      ~= positive-supported effect not anti-supported
+```
+
+### Key-effect DICE separator
+
+Runs:
+
+```text
+runs/teacher6_extra14_dice_keyeffect_anti14_s020_eval20
+runs/teacher6_extra14_dice_keyeffect_relaxed_anti14_s020_eval20
+```
+
+Results:
+
+| Method | Edited | c2w | drop | max drop | final Fro/layer | gate mean |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| key-effect DICE strict | `0/20` | `0` | `0.012` | `0.081` | `0.009` | `0.009` |
+| key-effect DICE relaxed | `0/20` | `0` | `0.035` | `0.120` | `0.056` | `0.159` |
+
+Interpretation:
+
+- The contrastive functional separator is extremely safe, but inert here.
+- The strict gate nearly zeroes the update. The relaxed gate increases update
+  norm about 6x but still does not move heldout margins enough.
+- This is a better safety coordinate than raw row quantiles, but it still
+  behaves like DICE's old safe-shard failure: the semantic payload is too sparse
+  in this key-effect coordinate.
+
+### ORCA residual-only retest
+
+The old high-acquisition ORCA residual-only run was:
+
+```text
+runs/relagg_orca_r16_soft_residualonly_s010_out256w10_in256w20_qwen17_auto
+```
+
+Old result:
+
+| Run | Edited | c2w | drop | max drop | Updates | Layers | Scale/cap |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| old ORCA residual-only | `9/20` | `2` | `1.287` | `5.814` | `168` | all `28` | `.10`, cap `50` |
+
+Important differences from the current teacher-valid micro benchmark:
+
+- old eval fixture:
+  `runs/modal_minilang_teacher_filtered_6lesson_ex8_cand80_eval20_qwen17_cuda/eval_questions.jsonl`;
+- current strict fixture:
+  `runs/strict_fixture_lyran_seed1_candidates80_eval20/eval_questions.jsonl`;
+- old source tokens look like `vek/soka/palo`, while current strict source
+  tokens use the prefixed form `lyvek/lysoka/lypalo`;
+- old run used all 28 layers, 6 lessons, target scale `.10`, and cap `50`;
+- current micro runs use 7 layers, 20 write contexts, scale `.02` or `.01`,
+  and cap `.75`.
+
+So the old `9/20` did not fail to reproduce under identical conditions. It was
+a different, much larger write regime and a different fixture.
+
+Retest in the teacher-valid micro benchmark:
+
+| Method | Edited | c2w | drop | max drop | mean update Fro | ORCA signal retention |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| ORCA residual-only `.02` | `1/20` | `2` | `1.408` | `6.076` | `0.569` | `0.017` |
+| ORCA residual-only `.01` | `1/20` | `2` | `0.983` | `3.765` | `0.446` | `0.008` |
+
+Both ORCA micro runs only recovered item `14`:
+
+```text
+the small teacher saw the small cat.
+```
+
+Diagnostics:
+
+- Old ORCA residual-only had mean update Fro `1.679` and signal retention
+  `0.326`.
+- Current ORCA residual-only `.02` has mean update Fro `0.569` and signal
+  retention `0.017`.
+- Current ORCA residual-only `.01` has mean update Fro `0.446` and signal
+  retention `0.008`.
+
+Interpretation:
+
+- ORCA residual-only's old high acquisition seems tied to a large all-layer
+  residual map, not to the current slow micro-write regime.
+- In the teacher-valid micro benchmark it is not a promising separator: it
+  under-acquires and still has `2` c2w.
+- The retest reduces trust in ORCA residual-only as a reusable acquisition
+  carrier for this regime, but it does not invalidate the old observation that
+  a large high-rank residual component can be behaviorally live.
+
+Next separator intuition:
+
+The separator needs to be less sparse than key-effect DICE and less local than
+ORCA's projected residual basis. The likely next unit is not a raw coordinate,
+column, single key effect, or ORCA atom residual. It should be a **functional
+maplet over a small role/key neighborhood**: a repeated transformation from a
+row-pattern neighborhood to an effect neighborhood that is present in
+same-language contexts and absent in rival-language contexts.
