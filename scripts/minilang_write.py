@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 import random
+import re
 import time
 
 import torch
@@ -3033,6 +3034,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bptc-min-branch-size", type=int, default=4)
     parser.add_argument("--bptc-gate-floor", type=float, default=0.05)
     parser.add_argument("--bptc-gate-cap", type=float, default=20.0)
+    parser.add_argument("--bptc-branch-mode", choices=["graph", "visible_spans"], default="graph")
     parser.add_argument("--bptc-no-preserve-weight-mean", action="store_true")
     parser.add_argument("--bptc-disable-leverage", action="store_true")
     parser.add_argument("--bptc-disable-precision", action="store_true")
@@ -3393,6 +3395,110 @@ def format_intrinsic_lesson_prompt(tokenizer, lesson_text: str, args: argparse.N
             tokenize=False,
             add_generation_prompt=False,
         )
+
+
+def _word_spans(text: str, base_start: int) -> list[tuple[str, int, int]]:
+    return [(m.group(0), base_start + m.start(), base_start + m.end()) for m in re.finditer(r"\S+", text)]
+
+
+def _assign_token_branch(
+    branches: torch.Tensor,
+    offsets: list[tuple[int, int]],
+    start: int,
+    end: int,
+    branch_id: int,
+) -> None:
+    for idx, (tok_start, tok_end) in enumerate(offsets):
+        if tok_end <= start or tok_start >= end:
+            continue
+        if tok_start == tok_end:
+            continue
+        branches[idx] = int(branch_id)
+
+
+def visible_minilang_branch_ids(tokenizer, prompt: str, input_ids: torch.Tensor) -> torch.Tensor | None:
+    """Visible-span branch ids for the current mini-language lesson prompt.
+
+    This is a diagnostic branch constructor, not a general learning rule. It
+    uses only the current lesson text already present in the forward pass. Branch
+    ids are coarse source/target roles: tense, verb, subject, object, and lexicon
+    tables. Unmatched tokens get -1.
+    """
+
+    try:
+        encoded = tokenizer(prompt, add_special_tokens=False, return_offsets_mapping=True)
+    except Exception:
+        return None
+    offsets_raw = encoded.get("offset_mapping")
+    ids_raw = encoded.get("input_ids")
+    if offsets_raw is None or ids_raw is None:
+        return None
+    if isinstance(ids_raw[0], list):
+        ids = ids_raw[0]
+        offsets_all = offsets_raw[0]
+    else:
+        ids = ids_raw
+        offsets_all = offsets_raw
+    if len(ids) < int(input_ids.numel()):
+        return None
+    trim_start = len(ids) - int(input_ids.numel())
+    offsets = [(int(s), int(e)) for s, e in offsets_all[trim_start:]]
+    if len(offsets) != int(input_ids.numel()):
+        return None
+    branches = torch.full((len(offsets),), -1, dtype=torch.long)
+
+    # Example spans. Source order is TENSE VERB SUBJECT OBJECT, with adjectives
+    # immediately following nouns. English target is ordinary subject/verb/object.
+    example_pattern = re.compile(r"^- (?P<src>.+?) -> (?P<tgt>.+?)$", re.MULTILINE)
+    for match in example_pattern.finditer(prompt):
+        src_spans = _word_spans(match.group("src"), match.start("src"))
+        tgt_text = match.group("tgt").rstrip(".")
+        tgt_spans = _word_spans(tgt_text, match.start("tgt"))
+        if len(src_spans) >= 1:
+            _assign_token_branch(branches, offsets, src_spans[0][1], src_spans[0][2], 10)  # tense
+        if len(src_spans) >= 2:
+            _assign_token_branch(branches, offsets, src_spans[1][1], src_spans[1][2], 20)  # verb
+        if len(src_spans) >= 3:
+            _assign_token_branch(branches, offsets, src_spans[2][1], src_spans[2][2], 30)  # subject noun
+        if len(src_spans) >= 4:
+            # With modifiers, source is tense verb subj subj_adj obj obj_adj.
+            if len(src_spans) >= 6:
+                _assign_token_branch(branches, offsets, src_spans[3][1], src_spans[3][2], 31)
+                _assign_token_branch(branches, offsets, src_spans[4][1], src_spans[4][2], 40)
+                _assign_token_branch(branches, offsets, src_spans[5][1], src_spans[5][2], 41)
+            else:
+                _assign_token_branch(branches, offsets, src_spans[3][1], src_spans[3][2], 40)
+
+        # English answer pattern: the [adj] noun verb the [adj] noun
+        words = [word.lower().strip(".,") for word, _s, _e in tgt_spans]
+        if words and words[0] == "the":
+            verb_pos = None
+            for idx, word in enumerate(words):
+                if word in {"sees", "saw", "likes", "liked", "helps", "helped"}:
+                    verb_pos = idx
+                    break
+            if verb_pos is not None:
+                for _word, start, end in tgt_spans[:verb_pos]:
+                    _assign_token_branch(branches, offsets, start, end, 30)
+                _assign_token_branch(branches, offsets, tgt_spans[verb_pos][1], tgt_spans[verb_pos][2], 20)
+                for _word, start, end in tgt_spans[verb_pos + 1 :]:
+                    _assign_token_branch(branches, offsets, start, end, 40)
+
+    for label, branch_id in (
+        ("Tense words:", 10),
+        ("Nouns:", 50),
+        ("Verbs:", 20),
+        ("Adjectives:", 51),
+    ):
+        start = prompt.find(label)
+        if start < 0:
+            continue
+        line_end = prompt.find("\n", start)
+        if line_end < 0:
+            line_end = len(prompt)
+        _assign_token_branch(branches, offsets, start, line_end, branch_id)
+
+    return branches
 
 
 @torch.no_grad()
@@ -3868,6 +3974,11 @@ def run_intrinsic_surprise_writes(
             device,
             args.max_length,
             capture_attentions=capture_wicr_attentions,
+        )
+        bptc_branch_ids = (
+            visible_minilang_branch_ids(tokenizer, prompt, input_ids)
+            if args.intrinsic_target_purifier == "bptc" and args.bptc_branch_mode == "visible_spans"
+            else None
         )
         karp_local_output_basis = local_logit_fisher_basis(
             model,
@@ -4361,6 +4472,7 @@ def run_intrinsic_surprise_writes(
                     weights=positive_weights,
                     all_outputs=captures[layer_idx].outputs[: usable_keys.shape[0]],
                     token_indices=selection.token_indices,
+                    branch_ids=bptc_branch_ids,
                     ridge=args.ridge,
                     graph_top_k=args.bptc_neighbor_k,
                     branch_rank=args.bptc_branch_rank,
@@ -5530,6 +5642,7 @@ def run_intrinsic_surprise_writes(
                     "bptc_min_branch_size": getattr(args, "bptc_min_branch_size", 0),
                     "bptc_gate_floor": getattr(args, "bptc_gate_floor", 0.0),
                     "bptc_gate_cap": getattr(args, "bptc_gate_cap", 0.0),
+                    "bptc_branch_mode": getattr(args, "bptc_branch_mode", ""),
                     "bptc_preserve_weight_mean": not bool(getattr(args, "bptc_no_preserve_weight_mean", False)),
                     "bptc_disable_leverage": bool(getattr(args, "bptc_disable_leverage", False)),
                     "bptc_disable_precision": bool(getattr(args, "bptc_disable_precision", False)),

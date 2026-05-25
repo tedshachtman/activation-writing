@@ -3844,3 +3844,39 @@ Conclusion:
 - The biological hypothesis should be refined toward **typed/facet-aware branch
   construction** and branch-level anti-support. A generic row graph over
   key/target/output similarity is not enough.
+
+## Postscript 26: Visible-Span BPTC Branch Diagnostic
+
+Implemented an intentionally overfit diagnostic branch mode:
+
+```text
+--bptc-branch-mode visible_spans
+```
+
+It assigns temporary branch ids from visible source/English example spans in the
+current lesson text: tense, verb, subject, object, and lexicon-table rows. This
+uses no eval labels, sentinels, probes, old traces, or sidecar state, but it is
+not a general mechanism.
+
+Strict Lyran single-task, 7-layer scale `.075`:
+
+| Method | Edited | c2w | drop | max drop | Correct items |
+| --- | ---: | ---: | ---: | ---: | --- |
+| raw relational/context-value | `7/20` | `0` | `1.664` | `6.950` | `1,2,4,5,7,14,17` |
+| BPTC graph capture only | `5/20` | `0` | `1.697` | `6.486` | `1,4,5,7,17` |
+| BPTC visible-span capture only | `5/20` | `0` | `1.649` | `6.722` | `1,2,4,5,17` |
+| BPTC visible-span capture + leverage | `5/20` | `3` | `1.755` | `7.200` | `1,4,5,7,17` |
+
+Visible-span capture assigned only mean `76.2/203.1` selected rows to facet
+branches. It changed the item profile and recovered item `2`, which the generic
+BPTC branch lost, but it did not improve the Pareto frontier or recover item
+`14`.
+
+Conclusion:
+
+- The branch object matters: visible role/facet branches select a different
+  semantic shard than generic graph branches.
+- The current visible-span branch rule is not sufficient. It is incomplete over
+  selected rows and unsafe when combined with the leverage cap.
+- Treat this as evidence for finding a better transformer-native branch/facet
+  coordinate, not as evidence that hardcoded language facets solve the problem.

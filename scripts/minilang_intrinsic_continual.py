@@ -334,6 +334,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bptc-min-branch-size", type=int, default=4)
     parser.add_argument("--bptc-gate-floor", type=float, default=0.05)
     parser.add_argument("--bptc-gate-cap", type=float, default=20.0)
+    parser.add_argument("--bptc-branch-mode", choices=["graph", "visible_spans"], default="graph")
     parser.add_argument("--bptc-no-preserve-weight-mean", action="store_true")
     parser.add_argument("--bptc-disable-leverage", action="store_true")
     parser.add_argument("--bptc-disable-precision", action="store_true")

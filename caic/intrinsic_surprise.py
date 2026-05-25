@@ -4613,6 +4613,7 @@ def bptc_transform_weights(
     weights: torch.Tensor,
     all_outputs: torch.Tensor,
     token_indices: torch.Tensor,
+    branch_ids: torch.Tensor | None = None,
     ridge: float = 1e-2,
     graph_top_k: int = 12,
     branch_rank: int = 32,
@@ -4655,6 +4656,12 @@ def bptc_transform_weights(
         h = all_h.index_select(0, safe_tok)
     else:
         h = y
+        safe_tok = tok[:n_rows].clamp(min=0, max=max(tok.numel() - 1, 0)) if tok.numel() >= n_rows else None
+    branch_row_ids: torch.Tensor | None = None
+    if branch_ids is not None and branch_ids.numel() > 0 and tok.numel() >= n_rows:
+        ids = branch_ids.detach().cpu().long().flatten()
+        safe = tok[:n_rows].clamp(min=0, max=max(ids.numel() - 1, 0))
+        branch_row_ids = ids.index_select(0, safe)
 
     node = torch.cat([F.normalize(k, dim=1), F.normalize(y, dim=1), F.normalize(h, dim=1)], dim=1)
     sim = torch.nan_to_num(node @ node.T, nan=0.0, posinf=0.0, neginf=0.0)
@@ -4696,14 +4703,24 @@ def bptc_transform_weights(
     branch_count = 1
     branch_score = torch.ones(1, dtype=torch.float32)
     small_branch_rows = 0
+    facet_branch_rows = 0
     if not disable_capture and n_rows > 1:
-        branch_count = min(max(1, int(branch_rank)), max(1, n_rows // max(1, int(min_branch_size))))
-        salience = w * torch.linalg.vector_norm(y, dim=1).clamp_min(float(eps))
-        anchor_idx = torch.topk(salience, k=branch_count, dim=0).indices
-        anchor_sim = node @ node.index_select(0, anchor_idx).T
-        if n_rows > 1:
-            anchor_sim = anchor_sim + 0.5 * p.index_select(1, anchor_idx)
-        assignment = torch.argmax(anchor_sim, dim=1)
+        assignment: torch.Tensor
+        if branch_row_ids is not None and int((branch_row_ids >= 0).sum().item()) >= max(1, int(min_branch_size)):
+            unique = torch.unique(branch_row_ids[branch_row_ids >= 0], sorted=True)
+            branch_count = int(unique.numel()) + 1
+            assignment = torch.full((n_rows,), branch_count - 1, dtype=torch.long)
+            for compact_idx, branch_id in enumerate(unique.tolist()):
+                assignment[branch_row_ids == int(branch_id)] = int(compact_idx)
+            facet_branch_rows = int((branch_row_ids >= 0).sum().item())
+        else:
+            branch_count = min(max(1, int(branch_rank)), max(1, n_rows // max(1, int(min_branch_size))))
+            salience = w * torch.linalg.vector_norm(y, dim=1).clamp_min(float(eps))
+            anchor_idx = torch.topk(salience, k=branch_count, dim=0).indices
+            anchor_sim = node @ node.index_select(0, anchor_idx).T
+            if n_rows > 1:
+                anchor_sim = anchor_sim + 0.5 * p.index_select(1, anchor_idx)
+            assignment = torch.argmax(anchor_sim, dim=1)
         global_mean = y.mean(dim=0)
         global_norm = torch.linalg.vector_norm(global_mean).square().clamp_min(float(eps))
         scores: list[torch.Tensor] = []
@@ -4711,6 +4728,10 @@ def bptc_transform_weights(
             mask = assignment == branch_idx
             count = int(mask.sum().item())
             if count < max(1, int(min_branch_size)):
+                small_branch_rows += count
+                scores.append(torch.tensor(float(eps), dtype=torch.float32))
+                continue
+            if branch_row_ids is not None and branch_idx == branch_count - 1 and facet_branch_rows > 0:
                 small_branch_rows += count
                 scores.append(torch.tensor(float(eps), dtype=torch.float32))
                 continue
@@ -4761,6 +4782,7 @@ def bptc_transform_weights(
         "bptc_rows": float(n_rows),
         "bptc_graph_top_k": float(max(0, int(graph_top_k))),
         "bptc_branch_rank": float(branch_count),
+        "bptc_facet_branch_rows": float(facet_branch_rows),
         "bptc_min_branch_size": float(max(1, int(min_branch_size))),
         "bptc_small_branch_rows": float(small_branch_rows),
         "bptc_gate_mean": float(gates.mean().item()),

@@ -9222,3 +9222,55 @@ Interpretation:
   by target/result similarity instead of grammar/role-local eligibility.
 - Next step should be item/facet-aware branch construction or branch-level
   anti-support, not stronger global precision gates.
+
+## 2026-05-25: Visible-Span BPTC Branch Diagnostic
+
+Added a diagnostic branch mode:
+
+```text
+--bptc-branch-mode visible_spans
+```
+
+This derives coarse branch ids from the current lesson text only: source/English
+example spans for tense, verb, subject, object, and lexicon-table lines. It is
+intentionally overfit as a diagnostic for the mini-language fixture, not a final
+general mechanism. The graph/branch ids are temporary and are discarded after
+the write.
+
+Strict Lyran single-task, 7 layers, scale `.075`:
+
+| Method | Edited | c2w | drop | max drop | severe drops | Correct items |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| raw relational/context-value | `7/20` | `0` | `1.664` | `6.950` | `7` | `1,2,4,5,7,14,17` |
+| BPTC graph capture only | `5/20` | `0` | `1.697` | `6.486` | `9` | `1,4,5,7,17` |
+| BPTC visible-span capture only | `5/20` | `0` | `1.649` | `6.722` | `8` | `1,2,4,5,17` |
+| BPTC visible-span capture + leverage | `5/20` | `3` | `1.755` | `7.200` | `6` | `1,4,5,7,17` |
+
+Runs:
+
+```text
+runs/strict_bptc_visible_capture_only_scale075_l7_eval20
+runs/strict_bptc_visible_capture_leverage_scale075_l7_eval20
+```
+
+Diagnostics:
+
+- Visible-span capture assigned a mean `76.2` of `203.1` selected rows to facet
+  branches; many rows remained unassigned or landed in too-small branches.
+- Visible-span capture recovered item `2` (`big teacher saw small cat`), which
+  belongs to the DICE shard, but lost item `7` from generic capture. It did not
+  recover item `14`.
+- Adding leverage to visible-span capture reintroduced `3` sentinel c2w and
+  reverted the item profile to the generic BPTC capture set.
+
+Interpretation:
+
+- Typed/facet-aware branches change the payload, so the branch object matters.
+  The result is not just a generic shrinker.
+- The current visible-span branch mode is not enough to beat raw or DICE. Its
+  coverage over selected rows is too incomplete, and combining it with leverage
+  creates unsafe reallocation.
+- This is a partial positive diagnostic for role/facet branch structure, not a
+  frontier method. A more transformer-native branch object should infer repeated
+  role/facet neighborhoods from activation/attention structure rather than
+  relying on explicit language spans.
