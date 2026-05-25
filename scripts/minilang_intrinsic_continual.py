@@ -293,6 +293,7 @@ def parse_args() -> argparse.Namespace:
             "tdmi_q",
             "wm_coherence",
             "gsci",
+            "bptc",
             "tgvq",
             "tag_ce",
             "cage_ce",
@@ -325,6 +326,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gsci-ghost-ridge", type=float, default=1e-5)
     parser.add_argument("--gsci-disable-schur", action="store_true")
     parser.add_argument("--gsci-shuffle-graph", action="store_true")
+    parser.add_argument("--bptc-branch-rank", type=int, default=32)
+    parser.add_argument("--bptc-neighbor-k", type=int, default=12)
+    parser.add_argument("--bptc-precision-temperature", type=float, default=0.5)
+    parser.add_argument("--bptc-capture-temperature", type=float, default=1.0)
+    parser.add_argument("--bptc-leverage-cap", type=float, default=0.03)
+    parser.add_argument("--bptc-min-branch-size", type=int, default=4)
+    parser.add_argument("--bptc-gate-floor", type=float, default=0.05)
+    parser.add_argument("--bptc-gate-cap", type=float, default=20.0)
+    parser.add_argument("--bptc-no-preserve-weight-mean", action="store_true")
+    parser.add_argument("--bptc-disable-leverage", action="store_true")
+    parser.add_argument("--bptc-disable-precision", action="store_true")
+    parser.add_argument("--bptc-disable-capture", action="store_true")
+    parser.add_argument("--bptc-shuffle-graph", action="store_true")
     parser.add_argument("--tgvq-observer-rank", type=int, default=64)
     parser.add_argument("--tgvq-object-row-rank", type=int, default=16)
     parser.add_argument("--tgvq-ghost-row-rank", type=int, default=12)

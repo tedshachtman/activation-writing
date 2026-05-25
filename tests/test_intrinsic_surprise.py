@@ -5,6 +5,7 @@ from torch.nn import functional as F
 from caic.intrinsic_surprise import (
     attention_flow_values,
     apply_mlp_gauge_seal_,
+    bptc_transform_weights,
     cage_ce_purify_update,
     down_output_basis_specificity,
     down_value_specificity,
@@ -634,6 +635,70 @@ def test_gsci_tag_capture_separate_latent_bases_are_used():
     assert result.diagnostics["gsci_capture_object_row_rank"] > 0
     assert result.diagnostics["gsci_capture_object_value_rank"] > 0
     assert result.diagnostics["gsci_capture_latent_gate_min"] < result.diagnostics["gsci_capture_latent_gate_max"]
+
+
+def test_bptc_leverage_cap_downweights_high_leverage_rows():
+    keys = torch.tensor(
+        [
+            [1.0, 0.0],
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [0.0, 0.9],
+        ]
+    )
+    targets = torch.eye(4, 3)
+    weights = torch.ones(4)
+    result = bptc_transform_weights(
+        keys=keys,
+        targets=targets,
+        weights=weights,
+        all_outputs=targets,
+        token_indices=torch.arange(4),
+        ridge=0.01,
+        leverage_cap=0.2,
+        disable_precision=True,
+        disable_capture=True,
+        preserve_weight_mean=False,
+    )
+    assert result.diagnostics["bptc_leverage_max"] > 0.2
+    assert result.gates.max().item() < 1.0
+    assert result.weights.mean().item() < weights.mean().item()
+
+
+def test_bptc_precision_prefers_graph_supported_rows():
+    keys = torch.tensor(
+        [
+            [1.0, 0.0, 0.0],
+            [0.9, 0.1, 0.0],
+            [1.1, -0.1, 0.0],
+            [0.95, 0.05, 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+    )
+    targets = torch.tensor(
+        [
+            [1.0, 0.0, 0.0],
+            [0.95, 0.05, 0.0],
+            [1.05, -0.05, 0.0],
+            [0.9, 0.1, 0.0],
+            [0.0, 1.0, 0.0],
+        ]
+    )
+    weights = torch.ones(5)
+    result = bptc_transform_weights(
+        keys=keys,
+        targets=targets,
+        weights=weights,
+        all_outputs=targets,
+        token_indices=torch.arange(5),
+        graph_top_k=2,
+        disable_leverage=True,
+        disable_capture=True,
+        preserve_weight_mean=False,
+        gate_floor=0.01,
+    )
+    assert result.gates[:4].mean().item() > result.gates[4].item()
+    assert result.diagnostics["bptc_precision_gate_max"] > result.diagnostics["bptc_precision_gate_mean"]
 
 
 def test_gsci_object_bandpass_targets_keep_object_value_subspace():

@@ -9137,3 +9137,88 @@ Interpretation:
 - Current live baseline remains raw relational/context-value `.075`: `7/20`
   single-task, `5/20` retained after task1, Vomar `3/20`, but unsafe after task1
   with `3` sentinel c2w and large margin drops.
+
+## 2026-05-25: BPTC v1 Branch-Precision Tag Capture
+
+Implemented the brain-inspired row allocator:
+
+```text
+--intrinsic-target-purifier bptc
+--bptc-neighbor-k 12
+--bptc-branch-rank 32
+--bptc-min-branch-size 4
+--bptc-precision-temperature 0.5
+--bptc-capture-temperature 1.0
+--bptc-leverage-cap 0.03
+```
+
+BPTC keeps the raw relational/context-value carrier. It changes only positive
+row weights before the existing closed-form solve:
+
+```text
+row weight = relational tag * local precision * branch capture * leverage cap
+```
+
+The graph/branch objects are temporary same-pass objects and are discarded after
+the write. No old keys, labels, probes, sentinels, replay, or sidecar state are
+used.
+
+Validation:
+
+```text
+python -m py_compile caic/intrinsic_surprise.py scripts/minilang_write.py scripts/minilang_intrinsic_continual.py
+python -m pytest tests/test_intrinsic_surprise.py -q  # 58 passed
+```
+
+Strict Lyran single-task, 7 layers, scale `.075`:
+
+| Method | Edited | c2w | drop | max drop | severe drops | Correct items |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| raw relational/context-value | `7/20` | `0` | `1.664` | `6.950` | `7` | `1,2,4,5,7,14,17` |
+| BPTC leverage only, no mean preserve | `4/20` | `1` | `1.339` | `4.688` | `7` | `1,4,5,17` |
+| BPTC leverage only, mean preserve | `5/20` | `0` | `1.510` | `7.445` | `4` | `1,4,5,7,17` |
+| BPTC precision only | `5/20` | `1` | `1.839` | `8.944` | `9` | `1,2,4,7,17` |
+| BPTC branch capture only | `5/20` | `0` | `1.697` | `6.486` | `9` | `1,4,5,7,17` |
+| BPTC full | `3/20` | `1` | `2.209` | `10.502` | `9` | `1,4,17` |
+
+Runs:
+
+```text
+runs/strict_bptc_leverage_cap03_scale075_l7_eval20
+runs/strict_bptc_leverage_cap03_preserve_scale075_l7_eval20
+runs/strict_bptc_precision_only_scale075_l7_eval20
+runs/strict_bptc_capture_only_scale075_l7_eval20
+runs/strict_bptc_full_scale075_l7_eval20
+```
+
+Raw payload anatomy table:
+
+```text
+runs/raw_payload_anatomy_20260525/anatomy.md
+runs/raw_payload_anatomy_20260525/anatomy.csv
+runs/raw_payload_anatomy_20260525/anatomy.jsonl
+RAW_PAYLOAD_ANATOMY_2026-05-25.md
+```
+
+Item profile:
+
+- Raw keeps `1,2,4,5,7,14,17`.
+- DICE key-edge keeps `2,14`: the safe `teacher saw cat` shard.
+- GSCI keeps `1,5,17`: likes plus cat-child, but misses the DICE shard.
+- BPTC leverage/capture keep `1,4,5,7,17`: likes plus some role cases, but
+  miss the DICE shard `2,14`.
+- Full BPTC over-gates down to `1,4,17`.
+
+Interpretation:
+
+- The leverage cap is directionally useful as a safety diagnostic: it reduces
+  average drop and severe-drop count when mean-preserved, but it loses two raw
+  items and does not improve max drop.
+- Current precision and branch-capture formulas are not valid capture
+  coordinates. Precision-only amplifies unsafe neighborhoods; full BPTC is worse
+  than either component.
+- The biological ontology still looks plausible, but BPTC v1 does not yet
+  implement the right branch object. The branch graph is probably grouping
+  by target/result similarity instead of grammar/role-local eligibility.
+- Next step should be item/facet-aware branch construction or branch-level
+  anti-support, not stronger global precision gates.

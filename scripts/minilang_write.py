@@ -23,6 +23,7 @@ from caic.intrinsic_surprise import (
     apply_mlp_gauge_seal_,
     apply_intrinsic_feature_birth_update_,
     base_down_weight,
+    bptc_transform_weights,
     cage_ce_purify_update,
     down_output_basis_specificity,
     down_value_specificity,
@@ -2991,6 +2992,7 @@ def parse_args() -> argparse.Namespace:
             "tdmi_q",
             "wm_coherence",
             "gsci",
+            "bptc",
             "tgvq",
             "tag_ce",
             "cage_ce",
@@ -3023,6 +3025,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gsci-ghost-ridge", type=float, default=1e-5)
     parser.add_argument("--gsci-disable-schur", action="store_true")
     parser.add_argument("--gsci-shuffle-graph", action="store_true")
+    parser.add_argument("--bptc-branch-rank", type=int, default=32)
+    parser.add_argument("--bptc-neighbor-k", type=int, default=12)
+    parser.add_argument("--bptc-precision-temperature", type=float, default=0.5)
+    parser.add_argument("--bptc-capture-temperature", type=float, default=1.0)
+    parser.add_argument("--bptc-leverage-cap", type=float, default=0.03)
+    parser.add_argument("--bptc-min-branch-size", type=int, default=4)
+    parser.add_argument("--bptc-gate-floor", type=float, default=0.05)
+    parser.add_argument("--bptc-gate-cap", type=float, default=20.0)
+    parser.add_argument("--bptc-no-preserve-weight-mean", action="store_true")
+    parser.add_argument("--bptc-disable-leverage", action="store_true")
+    parser.add_argument("--bptc-disable-precision", action="store_true")
+    parser.add_argument("--bptc-disable-capture", action="store_true")
+    parser.add_argument("--bptc-shuffle-graph", action="store_true")
     parser.add_argument("--tgvq-observer-rank", type=int, default=64)
     parser.add_argument("--tgvq-object-row-rank", type=int, default=16)
     parser.add_argument("--tgvq-ghost-row-rank", type=int, default=12)
@@ -4339,6 +4354,32 @@ def run_intrinsic_surprise_writes(
                 if selection.diagnostics is None:
                     selection.diagnostics = {}
                 selection.diagnostics.update(gsci_result.diagnostics)
+            if args.intrinsic_target_purifier == "bptc":
+                bptc_result = bptc_transform_weights(
+                    keys=selection.keys,
+                    targets=targets,
+                    weights=positive_weights,
+                    all_outputs=captures[layer_idx].outputs[: usable_keys.shape[0]],
+                    token_indices=selection.token_indices,
+                    ridge=args.ridge,
+                    graph_top_k=args.bptc_neighbor_k,
+                    branch_rank=args.bptc_branch_rank,
+                    min_branch_size=args.bptc_min_branch_size,
+                    precision_temperature=args.bptc_precision_temperature,
+                    capture_temperature=args.bptc_capture_temperature,
+                    leverage_cap=args.bptc_leverage_cap,
+                    gate_floor=args.bptc_gate_floor,
+                    gate_cap=args.bptc_gate_cap,
+                    preserve_weight_mean=not args.bptc_no_preserve_weight_mean,
+                    disable_leverage=args.bptc_disable_leverage,
+                    disable_precision=args.bptc_disable_precision,
+                    disable_capture=args.bptc_disable_capture,
+                    shuffle_graph=args.bptc_shuffle_graph,
+                )
+                positive_weights = bptc_result.weights
+                if selection.diagnostics is None:
+                    selection.diagnostics = {}
+                selection.diagnostics.update(bptc_result.diagnostics)
             uncapped_target_fro = float(torch.linalg.vector_norm(targets.float()).item())
             target_center_norm = 0.0
             if args.intrinsic_surprise_center_targets:
@@ -5481,6 +5522,19 @@ def run_intrinsic_surprise_writes(
                     "gsci_ghost_ridge": getattr(args, "gsci_ghost_ridge", 0.0),
                     "gsci_disable_schur": bool(getattr(args, "gsci_disable_schur", False)),
                     "gsci_shuffle_graph": bool(getattr(args, "gsci_shuffle_graph", False)),
+                    "bptc_branch_rank": getattr(args, "bptc_branch_rank", 0),
+                    "bptc_neighbor_k": getattr(args, "bptc_neighbor_k", 0),
+                    "bptc_precision_temperature": getattr(args, "bptc_precision_temperature", 0.0),
+                    "bptc_capture_temperature": getattr(args, "bptc_capture_temperature", 0.0),
+                    "bptc_leverage_cap": getattr(args, "bptc_leverage_cap", 0.0),
+                    "bptc_min_branch_size": getattr(args, "bptc_min_branch_size", 0),
+                    "bptc_gate_floor": getattr(args, "bptc_gate_floor", 0.0),
+                    "bptc_gate_cap": getattr(args, "bptc_gate_cap", 0.0),
+                    "bptc_preserve_weight_mean": not bool(getattr(args, "bptc_no_preserve_weight_mean", False)),
+                    "bptc_disable_leverage": bool(getattr(args, "bptc_disable_leverage", False)),
+                    "bptc_disable_precision": bool(getattr(args, "bptc_disable_precision", False)),
+                    "bptc_disable_capture": bool(getattr(args, "bptc_disable_capture", False)),
+                    "bptc_shuffle_graph": bool(getattr(args, "bptc_shuffle_graph", False)),
                     "tgvq_observer_rank": getattr(args, "tgvq_observer_rank", 0),
                     "tgvq_object_row_rank": getattr(args, "tgvq_object_row_rank", 0),
                     "tgvq_ghost_row_rank": getattr(args, "tgvq_ghost_row_rank", 0),

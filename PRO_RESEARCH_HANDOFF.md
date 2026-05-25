@@ -3785,3 +3785,62 @@ Conclusion:
 
 The live target is unchanged: keep the raw `.075` relational/context-value
 carrier but reduce task1 margin damage and sentinel c2w without sidecar state.
+
+## Postscript 25: BPTC v1 Branch-Precision Tag Capture
+
+Implemented a brain-inspired row allocator:
+
+```text
+--intrinsic-target-purifier bptc
+```
+
+It keeps raw relational/context-value targets as the memory content and changes
+only row allocation before the closed-form solve. Temporary same-pass graph
+neighborhoods act as dendritic/branch-like capsules. The factors are:
+
+```text
+local relational tag
+* local precision
+* branch capture
+* ridge leverage cap
+```
+
+No extra state persists after the write.
+
+Strict Lyran single-task, 7-layer scale `.075`:
+
+| Method | Edited | c2w | drop | max drop | Correct items |
+| --- | ---: | ---: | ---: | ---: | --- |
+| raw relational/context-value | `7/20` | `0` | `1.664` | `6.950` | `1,2,4,5,7,14,17` |
+| BPTC leverage only, no mean preserve | `4/20` | `1` | `1.339` | `4.688` | `1,4,5,17` |
+| BPTC leverage only, mean preserve | `5/20` | `0` | `1.510` | `7.445` | `1,4,5,7,17` |
+| BPTC precision only | `5/20` | `1` | `1.839` | `8.944` | `1,2,4,7,17` |
+| BPTC branch capture only | `5/20` | `0` | `1.697` | `6.486` | `1,4,5,7,17` |
+| BPTC full | `3/20` | `1` | `2.209` | `10.502` | `1,4,17` |
+
+The raw payload anatomy artifact is:
+
+```text
+RAW_PAYLOAD_ANATOMY_2026-05-25.md
+runs/raw_payload_anatomy_20260525/anatomy.md
+```
+
+The item split is highly informative:
+
+- DICE key-edge keeps only `2,14`, the safe `teacher saw cat` shard.
+- GSCI keeps `1,5,17`, recovering likes/cat-child but missing the DICE shard.
+- BPTC leverage/capture keep `1,4,5,7,17`, preserving likes and some role cases
+  but also missing the DICE shard.
+- Full BPTC over-gates to `1,4,17`.
+
+Conclusion:
+
+- BPTC v1 is not the frontier. It does not beat raw `.075` or DICE on the
+  acquisition/safety Pareto.
+- The leverage cap is the only useful subcomponent so far. It behaves like a
+  partial anti-aberrant-salience diagnostic, but not a full safety mechanism.
+- Current precision/capture graph neighborhoods are wrong: they amplify or
+  over-prune rather than isolating branch-local semantic eligibility.
+- The biological hypothesis should be refined toward **typed/facet-aware branch
+  construction** and branch-level anti-support. A generic row graph over
+  key/target/output similarity is not enough.

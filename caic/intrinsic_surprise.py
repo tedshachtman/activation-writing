@@ -239,6 +239,15 @@ class GsciTransformResult:
 
 
 @dataclass
+class BptcTransformResult:
+    """BPTC row-weight transform for relational context-value writes."""
+
+    weights: torch.Tensor
+    gates: torch.Tensor
+    diagnostics: dict[str, float]
+
+
+@dataclass
 class TgvqPurificationResult:
     """TGVQ post-solve transported graph-value quotient update."""
 
@@ -4595,6 +4604,190 @@ def _gsci_row_pca_modes(rows: torch.Tensor, *, rank: int, n_rows: int) -> torch.
     if keep <= 0:
         return torch.empty(0, n_rows, dtype=torch.float32)
     return F.normalize(u[:, :keep].T, dim=1).contiguous()
+
+
+def bptc_transform_weights(
+    *,
+    keys: torch.Tensor,
+    targets: torch.Tensor,
+    weights: torch.Tensor,
+    all_outputs: torch.Tensor,
+    token_indices: torch.Tensor,
+    ridge: float = 1e-2,
+    graph_top_k: int = 12,
+    branch_rank: int = 32,
+    min_branch_size: int = 4,
+    precision_temperature: float = 0.5,
+    capture_temperature: float = 1.0,
+    leverage_cap: float = 0.03,
+    gate_floor: float = 0.05,
+    gate_cap: float = 20.0,
+    preserve_weight_mean: bool = True,
+    disable_leverage: bool = False,
+    disable_precision: bool = False,
+    disable_capture: bool = False,
+    shuffle_graph: bool = False,
+    eps: float = 1e-6,
+) -> BptcTransformResult:
+    """Branch-precision tag capture row allocator.
+
+    BPTC treats relational/context-value rows as local eligibility tags. It does
+    not change the rich carrier target. Instead, it computes a same-pass graph
+    over selected rows, estimates local precision and branch/capsule capture,
+    applies a ridge leverage cap, and returns reweighted positive rows for the
+    existing closed-form solve.
+    """
+
+    k = torch.nan_to_num(keys.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    y = torch.nan_to_num(targets.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    w = torch.nan_to_num(weights.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+    all_h = torch.nan_to_num(all_outputs.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    tok = token_indices.detach().cpu().long()
+    if k.ndim != 2 or y.ndim != 2 or k.shape[0] != y.shape[0]:
+        raise ValueError("BPTC keys and targets must be [n,m] and [n,d] with matching rows")
+    n_rows, d_model = y.shape
+    if n_rows == 0:
+        return BptcTransformResult(w, torch.empty(0, dtype=torch.float32), {"bptc_enabled": 1.0})
+    if w.ndim != 1 or w.shape[0] != n_rows:
+        raise ValueError("BPTC weights must align with selected rows")
+    if all_h.ndim == 2 and all_h.shape[1] == d_model and tok.numel() >= n_rows:
+        safe_tok = tok[:n_rows].clamp(min=0, max=max(all_h.shape[0] - 1, 0))
+        h = all_h.index_select(0, safe_tok)
+    else:
+        h = y
+
+    node = torch.cat([F.normalize(k, dim=1), F.normalize(y, dim=1), F.normalize(h, dim=1)], dim=1)
+    sim = torch.nan_to_num(node @ node.T, nan=0.0, posinf=0.0, neginf=0.0)
+    if tok.numel() >= n_rows and n_rows > 1:
+        pos = tok[:n_rows].float()
+        sim = sim - 0.02 * torch.log1p((pos[:, None] - pos[None, :]).abs())
+    sim.fill_diagonal_(-1e9)
+    if n_rows == 1:
+        p = torch.ones(1, 1, dtype=torch.float32)
+    else:
+        keep = max(1, min(int(graph_top_k), n_rows - 1))
+        vals, idx = torch.topk(sim, k=keep, dim=1)
+        row = torch.softmax(vals - vals.max(dim=1, keepdim=True).values, dim=1)
+        graph = torch.zeros(n_rows, n_rows, dtype=torch.float32)
+        graph.scatter_(1, idx, row)
+        graph = 0.5 * (graph + graph.T)
+        if shuffle_graph and n_rows > 2:
+            graph = torch.roll(graph, shifts=1, dims=1)
+            graph.fill_diagonal_(0.0)
+        p = graph / graph.sum(dim=1, keepdim=True).clamp_min(float(eps))
+
+    neighbor_mean = p @ y
+    pair_var = p @ torch.cdist(y, y).square()
+    target_norm = torch.linalg.vector_norm(y, dim=1).square().clamp_min(float(eps))
+    agreement = torch.linalg.vector_norm(neighbor_mean, dim=1).square() / (
+        pair_var.diag().clamp_min(float(eps)) + 0.05 * target_norm
+    )
+    precision_gate = torch.ones(n_rows, dtype=torch.float32)
+    if not disable_precision:
+        precision_gate = _robust_exp_gate(
+            agreement,
+            temperature=max(float(precision_temperature), float(eps)),
+            cap=gate_cap,
+            floor=gate_floor,
+            eps=eps,
+        )
+
+    branch_gate = torch.ones(n_rows, dtype=torch.float32)
+    branch_count = 1
+    branch_score = torch.ones(1, dtype=torch.float32)
+    small_branch_rows = 0
+    if not disable_capture and n_rows > 1:
+        branch_count = min(max(1, int(branch_rank)), max(1, n_rows // max(1, int(min_branch_size))))
+        salience = w * torch.linalg.vector_norm(y, dim=1).clamp_min(float(eps))
+        anchor_idx = torch.topk(salience, k=branch_count, dim=0).indices
+        anchor_sim = node @ node.index_select(0, anchor_idx).T
+        if n_rows > 1:
+            anchor_sim = anchor_sim + 0.5 * p.index_select(1, anchor_idx)
+        assignment = torch.argmax(anchor_sim, dim=1)
+        global_mean = y.mean(dim=0)
+        global_norm = torch.linalg.vector_norm(global_mean).square().clamp_min(float(eps))
+        scores: list[torch.Tensor] = []
+        for branch_idx in range(branch_count):
+            mask = assignment == branch_idx
+            count = int(mask.sum().item())
+            if count < max(1, int(min_branch_size)):
+                small_branch_rows += count
+                scores.append(torch.tensor(float(eps), dtype=torch.float32))
+                continue
+            y_b = y[mask]
+            mean_b = y_b.mean(dim=0)
+            within = torch.linalg.vector_norm(y_b - mean_b.unsqueeze(0), dim=1).square().mean()
+            between = torch.linalg.vector_norm(mean_b - global_mean).square()
+            coherence = torch.linalg.vector_norm(mean_b).square() / within.clamp_min(float(eps))
+            posture = (torch.dot(mean_b, global_mean).square() / (
+                torch.linalg.vector_norm(mean_b).square().clamp_min(float(eps)) * global_norm
+            )).clamp(min=0.0, max=1.0)
+            size_gain = min(2.0, count / max(1.0, float(min_branch_size)))
+            scores.append((coherence * (1.0 - posture + 0.05) * size_gain + 0.1 * between).clamp_min(float(eps)))
+        branch_score = torch.stack(scores)
+        branch_capture = _robust_exp_gate(
+            branch_score,
+            temperature=max(float(capture_temperature), float(eps)),
+            cap=gate_cap,
+            floor=gate_floor,
+            eps=eps,
+        )
+        branch_gate = branch_capture.index_select(0, assignment)
+
+    leverage_gate = torch.ones(n_rows, dtype=torch.float32)
+    leverage = torch.zeros(n_rows, dtype=torch.float32)
+    if not disable_leverage and float(leverage_cap) > 0.0 and n_rows > 1:
+        k_weighted = k * w.clamp_min(0.0).sqrt().unsqueeze(1)
+        gram = k_weighted @ k_weighted.T
+        system = gram + max(float(ridge), float(eps)) * torch.eye(n_rows, dtype=torch.float32)
+        hat_like = _solve_symmetric_psd(system, gram)
+        leverage = torch.diag(hat_like).clamp_min(0.0)
+        leverage_gate = torch.minimum(
+            torch.ones_like(leverage),
+            torch.full_like(leverage, float(leverage_cap)) / leverage.clamp_min(float(eps)),
+        )
+
+    gates = precision_gate * branch_gate * leverage_gate
+    gates = torch.nan_to_num(gates, nan=0.0, posinf=float(gate_cap), neginf=0.0).clamp(
+        min=0.0,
+        max=float(gate_cap),
+    )
+    w_new = w * gates
+    before_mean = w.mean().clamp_min(float(eps))
+    if preserve_weight_mean and float(w_new.mean().item()) > 0.0:
+        w_new = w_new * (before_mean / w_new.mean().clamp_min(float(eps)))
+    diagnostics = {
+        "bptc_enabled": 1.0,
+        "bptc_rows": float(n_rows),
+        "bptc_graph_top_k": float(max(0, int(graph_top_k))),
+        "bptc_branch_rank": float(branch_count),
+        "bptc_min_branch_size": float(max(1, int(min_branch_size))),
+        "bptc_small_branch_rows": float(small_branch_rows),
+        "bptc_gate_mean": float(gates.mean().item()),
+        "bptc_gate_min": float(gates.min().item()),
+        "bptc_gate_max": float(gates.max().item()),
+        "bptc_precision_gate_mean": float(precision_gate.mean().item()),
+        "bptc_precision_gate_max": float(precision_gate.max().item()),
+        "bptc_branch_gate_mean": float(branch_gate.mean().item()),
+        "bptc_branch_gate_max": float(branch_gate.max().item()),
+        "bptc_branch_score_mean": float(branch_score.mean().item()),
+        "bptc_leverage_mean": float(leverage.mean().item()),
+        "bptc_leverage_max": float(leverage.max().item()),
+        "bptc_leverage_gate_mean": float(leverage_gate.mean().item()),
+        "bptc_leverage_cap": float(leverage_cap),
+        "bptc_disable_leverage": 1.0 if disable_leverage else 0.0,
+        "bptc_disable_precision": 1.0 if disable_precision else 0.0,
+        "bptc_disable_capture": 1.0 if disable_capture else 0.0,
+        "bptc_preserve_weight_mean": 1.0 if preserve_weight_mean else 0.0,
+        "bptc_weight_mean_before": float(before_mean.item()),
+        "bptc_weight_mean_after": float(w_new.mean().item()),
+        "bptc_shuffle_graph": 1.0 if shuffle_graph else 0.0,
+    }
+    return BptcTransformResult(
+        weights=torch.nan_to_num(w_new, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0).contiguous(),
+        gates=gates.contiguous(),
+        diagnostics=diagnostics,
+    )
 
 
 def gsci_transform_targets(
