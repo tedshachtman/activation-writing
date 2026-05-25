@@ -9274,3 +9274,95 @@ Interpretation:
   frontier method. A more transformer-native branch object should infer repeated
   role/facet neighborhoods from activation/attention structure rather than
   relying on explicit language spans.
+
+## 2026-05-25: Safe Micro-Capture Accumulation Check
+
+Motivation:
+
+The target regime may not be a single large write that captures most of a
+context. A safer target is many extremely selective writes, each capturing only
+high-confidence lesson-relevant mass. In statistical terms, this treats the
+writer like a high-precision, low-recall classifier over candidate write
+components: accept low per-context recall if the false-positive rate on generic
+answer/posture/default components is near zero, then accumulate across many
+independent contexts.
+
+This is closer to the user's medical-diagnosis framing: if the blue semantic
+distribution and red posture/damage distribution overlap, a one-shot raw write
+sets the decision boundary deep enough to recover many blue points but also
+admits red points. A slow micro-capture regime puts the boundary far into the
+high-confidence blue tail and relies on repeated contexts to recover coverage.
+
+Implementation:
+
+- Carrier: raw `relational_aggregate` + `context` value.
+- Layers: `4,8,12,16,20,24,27`.
+- Scale: `.02` or `.03`.
+- Per-layer cap: `--max-update-norm 0.75`.
+- Existing output/input protections: output rank/weight `256/10`, input
+  features/weight `256/20`.
+- No DICE, BPTC, TAG-CE, GSCI, old keys, probes, labels, sentinels, or sidecar
+  state in the write.
+
+Runs:
+
+```text
+runs/strict_safe_micro_raw_s020_cap075_l6_eval20
+runs/strict_safe_micro_raw_s020_cap075_l20_eval20
+runs/strict_safe_micro_raw_s030_cap075_l20_eval20
+```
+
+Results on the strict frozen Lyran eval set:
+
+| Method | Context correct | Edited | c2w | drop | max drop | severe drops | Correct items |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 6 contexts, scale `.02`, cap `.75` | `20/20` | `0/20` | `1` | `0.380` | `1.666` | `1` | none |
+| 20 contexts, scale `.02`, cap `.75` | `8/20` | `5/20` | `0` | `0.936` | `2.890` | `6` | `3,4,5,16,17` |
+| 20 contexts, scale `.03`, cap `.75` | `8/20` | `3/20` | `0` | `0.959` | `3.007` | `6` | `4,5,17` |
+
+Correct items for the best micro-capture run (`.02`, 20 contexts):
+
+```text
+3:  the big dog sees the big bird.
+4:  the small dog saw the big teacher.
+5:  the big child likes the small bird.
+16: the small dog sees the big child.
+17: the small cat saw the small child.
+```
+
+Diagnostics:
+
+- The 6-context `.02` control had several near-misses but no correct answers.
+  The 20-context `.02` run crossed five heldout items with zero sentinel c2w.
+  This is a first positive signal for accumulation rather than a single-context
+  scale artifact.
+- Increasing scale from `.02` to `.03` did not help. It reduced acquisition
+  from `5/20` to `3/20` and slightly worsened max drop. The frontier is not
+  "turn up the write"; it is repeated conservative capture.
+- The `.02` 20-context run is much safer than the raw one-shot `.075` frontier
+  (`7/20`, c2w `0`, drop `1.664`, max drop `6.950`) while retaining nontrivial
+  acquisition (`5/20`, drop `0.936`, max drop `2.890`).
+- The correct item profile is not the old DICE `teacher saw cat` shard. It
+  includes present `sees`, past `saw`, and `likes` role cases.
+
+Important caveat:
+
+The 20-context prompt scores only `8/20` in-context on the fixed strict eval,
+while the 6-context prompt scores `20/20`. This means the 20-context run is not
+a clean "teacher is perfect" fixture. The likely issue is prompt/lesson
+distribution or context length mismatch with the frozen eval, not necessarily
+model incapacity. Future accumulation curves should use contexts whose in-pass
+teacher score remains high, or use a fixture generated for the multi-context
+lesson format.
+
+Interpretation:
+
+- Safe micro-capture is now a serious path. It matches the desired regime:
+  small, closed-form, one-pass writes; no sidecar; no probes; no sentinel use;
+  much lower margin damage than one-shot raw while acquiring a meaningful shard.
+- The right next experiment is an accumulation curve with high-teacher-score
+  contexts: `1, 2, 4, 8, 12, 20` contexts at scale `.02` and cap `.75`, plus a
+  two-task sequence at the best safe point.
+- This reframes the objective. We may not need every pass to learn much. We
+  need the accepted components to be clean enough that many passes can compound
+  without accumulating red/posture damage.

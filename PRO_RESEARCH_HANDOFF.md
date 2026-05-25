@@ -3880,3 +3880,100 @@ Conclusion:
   selected rows and unsafe when combined with the leverage cap.
 - Treat this as evidence for finding a better transformer-native branch/facet
   coordinate, not as evidence that hardcoded language facets solve the problem.
+
+## Postscript 27: Safe Micro-Capture Accumulation
+
+The latest useful result shifts the strategy from "one large purified write" to
+"many very conservative writes."
+
+Hypothesis:
+
+Treat the writer as a high-precision, low-recall classifier over candidate
+weight components. The one-shot raw relational write recovers more language but
+admits too much generic answer/posture/default mass. A micro-capture regime sets
+the boundary much more conservatively, accepts that each context retains only a
+small shard, and relies on repeated independent contexts to accumulate coverage.
+
+Implementation:
+
+```text
+carrier: relational_aggregate + context-value
+layers: 4,8,12,16,20,24,27
+scale: .02 or .03
+max-update-norm: .75
+output/input protection: 256/10 and 256/20
+no DICE/BPTC/TAG-CE/GSCI/old keys/probes/labels/sentinels/sidecar in the write
+```
+
+Runs:
+
+```text
+runs/strict_safe_micro_raw_s020_cap075_l6_eval20
+runs/strict_safe_micro_raw_s020_cap075_l20_eval20
+runs/strict_safe_micro_raw_s030_cap075_l20_eval20
+```
+
+Results:
+
+| Method | Context | Edited | c2w | drop | max drop | Correct items |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| 6 contexts, scale `.02`, cap `.75` | `20/20` | `0/20` | `1` | `0.380` | `1.666` | none |
+| 20 contexts, scale `.02`, cap `.75` | `8/20` | `5/20` | `0` | `0.936` | `2.890` | `3,4,5,16,17` |
+| 20 contexts, scale `.03`, cap `.75` | `8/20` | `3/20` | `0` | `0.959` | `3.007` | `4,5,17` |
+
+The best run (`.02`, 20 contexts) got:
+
+```text
+3:  the big dog sees the big bird.
+4:  the small dog saw the big teacher.
+5:  the big child likes the small bird.
+16: the small dog sees the big child.
+17: the small cat saw the small child.
+```
+
+Why this matters:
+
+- It is the first strong empirical hint that repeated tiny captures can cross
+  heldout items while keeping sentinel c2w at zero.
+- It is much safer than one-shot raw `.075`: raw has `7/20`, c2w `0`, drop
+  `1.664`, max drop `6.950`; micro `.02` has `5/20`, c2w `0`, drop `0.936`,
+  max drop `2.890`.
+- Scale `.03` is worse than `.02`, so this is not a simple volume knob.
+- The item profile is broader than the DICE `teacher saw cat` shard; it includes
+  `sees`, `saw`, and `likes` role cases.
+
+Caveat:
+
+The 20-context prompt only scores `8/20` in-context on the fixed strict eval,
+while the 6-context prompt scores `20/20`. That means the current 20-context
+fixture is not a clean "teacher perfect" setup. The likely problem is
+prompt/context distribution or length mismatch. A cleaner accumulation study
+should either maintain high in-context teacher accuracy for the multi-context
+prompt or regenerate the fixed eval for the multi-context lesson format.
+
+Next recommended experiment:
+
+Run an accumulation curve with teacher-valid contexts:
+
+```text
+contexts: 1,2,4,8,12,20
+scale: .02
+cap: .75
+same frozen eval when teacher score stays high, otherwise regenerate fixture
+metrics: edited items, c2w, before-correct drop, max drop, item profile
+```
+
+Then run a no-sidecar two-task sequence at the best safe point:
+
+```text
+task0: many tiny Lyran captures -> merge weights
+task1: many tiny Vomar captures -> merge weights
+evaluate Lyran retention, Vomar acquisition, expanded sentinel c2w
+```
+
+Interpretation:
+
+This supports the user's statistical framing: if semantic and posture components
+overlap, a one-shot high-recall boundary admits false positives. The safer
+strategy is to operate only in the high-confidence semantic tail and recover
+coverage through repeated independent contexts.
