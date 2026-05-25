@@ -3651,3 +3651,97 @@ Conclusion: the implementation hook works, but target-SVD/effect facets are not
 the missing coverage object. Capping makes it safe and inert; uncapped
 reconstruction can reintroduce c2w without acquisition. Next version needs real
 visible-span/role facets, not target-SVD facet grouping.
+
+## Postscript 22: GSCI and TGVQ Update
+
+Implemented the brain-inspired GSCI line:
+
+```text
+--intrinsic-target-purifier gsci
+--gsci-capture-mode tag_capture
+--gsci-latent-basis-mode separate
+--gsci-schur-mode design
+```
+
+Best strict Lyran 7-layer GSCI point:
+
+| Method | Edited | c2w | drop | max drop | Correct items |
+| --- | ---: | ---: | ---: | ---: | --- |
+| separate object/posture latent, full carrier | `3/20` | `0` | `2.034` | `7.641` | idx `1,5,17` |
+
+This confirmed row-side object/posture competition is real, because it recovered
+`small cat saw small child`, not only the previous DICE shard. But margin damage
+remained high, and value-rank expansion, object-value bandpass, and stronger
+output protection all behaved like blunt shrinkers.
+
+Then implemented a transport-sketch version of TGVQ:
+
+```text
+--intrinsic-target-purifier tgvq
+```
+
+It keeps the raw relational/context-value candidate and projects it in update
+space against graph-row x transported-value-signature ghost functionals. This
+first version uses cheap same-pass/future-hidden observer sketches, not exact
+autograd VJPs.
+
+Strict Lyran 7-layer results:
+
+| Method | Scale | Edited | c2w | drop | max drop | Correct items |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| raw relational/context-value | `.10` | `7/20` | `0` | `2.142` | `9.808` | idx `1,2,4,5,7,14,17` |
+| raw relational/context-value | `.075` | `7/20` | `0` | `1.664` | `6.950` | idx `1,2,4,5,7,14,17` |
+| TGVQ ghost `1`, cap `.35` | `.10` | `4/20` | `2` | `2.323` | `6.831` | idx `1,2,4,17` |
+| TGVQ ghost `4`, cap `.50` | `.10` | `3/20` | `2` | `2.299` | `5.503` | idx `1,4,17` |
+| TGVQ ghost `1`, cap `.35` | `.075` | `3/20` | `0` | `1.610` | `5.050` | idx `1,4,17` |
+
+TGVQ is not the new frontier. It deletes useful raw carrier mass. The matched
+raw `.075` control is decisive: it keeps the full seven-item payload with zero
+discrete c2w, although sentinel margins are still badly damaged.
+
+## Postscript 23: Raw `.075` Strict Two-Task Baseline
+
+Ran strict Lyran -> Vomar with no sidecar and no purifier:
+
+```text
+runs/strict_fixture_lyran_vomar_seed1_candidates80_eval20/eval_questions.jsonl
+raw relational/context-value
+scale .075
+7 layers: 4,8,12,16,20,24,27
+```
+
+Both tasks are good fixtures:
+
+| Task | Baseline | Standard context |
+| --- | ---: | ---: |
+| Lyran | `0/20` | `20/20` |
+| Vomar | `0/20` | `20/20` |
+
+Sequential result:
+
+| Stage | Lyran | Vomar | expanded c2w | drop | max drop |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| after task0 | `7/20` | - | `0` | `1.664` | `6.950` |
+| after task1 | `5/20` | `3/20` | `3` | `3.720` | `15.950` |
+
+Interpretation:
+
+- Raw `.075` is the first strict fixture result that learns both tasks at all:
+  task0 `7/20`, retained `5/20`, task1 `3/20`.
+- It is still unsafe: after task1, expanded sentinel c2w is `3`, with huge
+  margin damage.
+- DICE is the opposite failure: task0 `2/20`, retained `2/20`, task1 `0/20`,
+  c2w `0`.
+
+The live problem is therefore not “recover acquisition from a safe shard.” The
+live problem is:
+
+```text
+Keep the raw .075 relational/context-value acquisition carrier,
+but make sequential writes margin-safe and sentinel-safe without old keys,
+replay, probes, labels, or sidecar state.
+```
+
+A proposed method should beat this baseline directly. On the strict fixture, it
+must preserve close to the raw seven-item single-task payload and improve the
+after-task1 c2w/margin profile; otherwise it is not progress.

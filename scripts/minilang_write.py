@@ -28,6 +28,8 @@ from caic.intrinsic_surprise import (
     down_value_specificity,
     effective_down_weight,
     gauge_canonical_key_scale,
+    gsci_design_solve_update,
+    gsci_transform_targets,
     karp_purify_update,
     orca_karp_purify_update,
     ocep_purify_update,
@@ -37,12 +39,14 @@ from caic.intrinsic_surprise import (
     qrico_purify_update,
     seal_qrico_purify_update,
     tdmi_q_transport_scores,
+    tgvq_purify_update,
     trace_q_purify_update,
     wm_coherence_scores,
     select_intrinsic_compatibility_residual_write,
     select_intrinsic_conditional_relation_innovation_write,
     select_intrinsic_conjunctive_feature_birth_update,
     select_intrinsic_feature_birth_update,
+    select_intrinsic_global_coherence_relational_write,
     select_intrinsic_schur_transport_actuator_write,
     select_intrinsic_associative_binding_write,
     select_intrinsic_predictive_residual_write,
@@ -2905,6 +2909,7 @@ def parse_args() -> argparse.Namespace:
             "associative_binding",
             "predictive_residual",
             "relational_aggregate",
+            "global_coherence_relational",
             "relational_residual",
             "compatibility_residual",
             "conditional_relation_innovation",
@@ -2979,6 +2984,8 @@ def parse_args() -> argparse.Namespace:
             "prism_q",
             "tdmi_q",
             "wm_coherence",
+            "gsci",
+            "tgvq",
             "tag_ce",
             "cage_ce",
             "trace_q",
@@ -2989,6 +2996,37 @@ def parse_args() -> argparse.Namespace:
         ],
         default="none",
     )
+    parser.add_argument("--gsci-graph-top-k", type=int, default=8)
+    parser.add_argument("--gsci-smooth-gamma", type=float, default=0.35)
+    parser.add_argument("--gsci-gate-temperature", type=float, default=0.75)
+    parser.add_argument("--gsci-gate-cap", type=float, default=20.0)
+    parser.add_argument("--gsci-gate-floor", type=float, default=0.05)
+    parser.add_argument("--gsci-row-nuisance-rank", type=int, default=16)
+    parser.add_argument("--gsci-value-nuisance-rank", type=int, default=32)
+    parser.add_argument("--gsci-low-innovation-quantile", type=float, default=0.35)
+    parser.add_argument("--gsci-capture-mode", choices=["innovation", "tag_capture"], default="innovation")
+    parser.add_argument("--gsci-latent-basis-mode", choices=["shared", "separate"], default="shared")
+    parser.add_argument("--gsci-object-row-rank", type=int, default=16)
+    parser.add_argument("--gsci-object-value-rank", type=int, default=32)
+    parser.add_argument("--gsci-object-quantile", type=float, default=0.75)
+    parser.add_argument("--gsci-latent-temperature", type=float, default=1.0)
+    parser.add_argument("--gsci-value-target-mode", choices=["full", "object_bandpass"], default="full")
+    parser.add_argument("--gsci-value-residual-floor", type=float, default=1.0)
+    parser.add_argument("--gsci-schur-weight", type=float, default=1.0)
+    parser.add_argument("--gsci-schur-mode", choices=["residualize", "design"], default="design")
+    parser.add_argument("--gsci-ghost-ridge", type=float, default=1e-5)
+    parser.add_argument("--gsci-disable-schur", action="store_true")
+    parser.add_argument("--gsci-shuffle-graph", action="store_true")
+    parser.add_argument("--tgvq-observer-rank", type=int, default=64)
+    parser.add_argument("--tgvq-object-row-rank", type=int, default=16)
+    parser.add_argument("--tgvq-ghost-row-rank", type=int, default=12)
+    parser.add_argument("--tgvq-object-signature-rank", type=int, default=16)
+    parser.add_argument("--tgvq-ghost-signature-rank", type=int, default=16)
+    parser.add_argument("--tgvq-graph-top-k", type=int, default=8)
+    parser.add_argument("--tgvq-horizon", type=int, default=2)
+    parser.add_argument("--tgvq-ghost-penalty", type=float, default=1.0)
+    parser.add_argument("--tgvq-object-preserve", type=float, default=2.0)
+    parser.add_argument("--tgvq-correction-cap", type=float, default=0.35)
     parser.add_argument("--karp-key-rank", type=int, default=64)
     parser.add_argument("--karp-value-rank", type=int, default=64)
     parser.add_argument("--karp-low-surprise-quantile", type=float, default=0.35)
@@ -3176,6 +3214,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--intrinsic-surprise-exp-temperature", type=float, default=1.0)
     parser.add_argument("--intrinsic-surprise-exp-cap", type=float, default=100.0)
     parser.add_argument("--intrinsic-surprise-prediction-ridge", type=float, default=1.0)
+    parser.add_argument("--intrinsic-surprise-pair-quantile", type=float, default=0.0)
+    parser.add_argument("--intrinsic-surprise-row-quantile", type=float, default=0.0)
+    parser.add_argument(
+        "--intrinsic-surprise-context-target-mode",
+        choices=["full", "surprising_pairs_only"],
+        default="full",
+    )
+    parser.add_argument("--global-coherence-context-rank", type=int, default=8)
+    parser.add_argument("--global-coherence-position-rank", type=int, default=2)
+    parser.add_argument("--global-coherence-ridge", type=float, default=1e-3)
+    parser.add_argument("--global-coherence-support-power", type=float, default=0.0)
+    parser.add_argument("--global-coherence-min-support-gain", type=float, default=0.0)
     parser.add_argument("--intrinsic-span-readout-bridge", action="store_true")
     parser.add_argument("--intrinsic-span-readout-scale", type=float, default=1.0)
     parser.add_argument("--intrinsic-span-readout-max-items", type=int, default=32)
@@ -3852,7 +3902,10 @@ def run_intrinsic_surprise_writes(
         else:
             logit_error_targets = torch.empty(0)
             token_losses = torch.empty(0)
-        for layer_idx, wrapper in wrappers.items():
+        for layer_idx in args.layers:
+            if layer_idx not in wrappers:
+                continue
+            wrapper = wrappers[layer_idx]
             layer = layers[layer_idx]
             keys = captures[layer_idx].keys
             down_weight = (
@@ -4013,6 +4066,8 @@ def run_intrinsic_surprise_writes(
                     key_feature_top_k=args.intrinsic_surprise_key_feature_top_k,
                     value_feature_top_k=args.intrinsic_surprise_value_feature_top_k,
                     pair_top_k=args.intrinsic_surprise_pair_top_k,
+                    pair_score_quantile=args.intrinsic_surprise_pair_quantile,
+                    row_score_quantile=args.intrinsic_surprise_row_quantile,
                     bidirectional_pairs=args.intrinsic_surprise_bidirectional_pairs,
                     relation_value_mode=args.intrinsic_surprise_relation_value_mode,
                     target_scale=args.intrinsic_surprise_target_scale,
@@ -4039,8 +4094,11 @@ def run_intrinsic_surprise_writes(
                         key_feature_top_k=args.intrinsic_surprise_key_feature_top_k,
                         value_feature_top_k=args.intrinsic_surprise_value_feature_top_k,
                         pair_top_k=args.intrinsic_surprise_pair_top_k,
+                        pair_score_quantile=args.intrinsic_surprise_pair_quantile,
+                        row_score_quantile=args.intrinsic_surprise_row_quantile,
                         bidirectional_pairs=args.intrinsic_surprise_bidirectional_pairs,
                         relation_value_mode=args.intrinsic_surprise_relation_value_mode,
+                        relation_context_target_mode=args.intrinsic_surprise_context_target_mode,
                         target_scale=args.intrinsic_surprise_target_scale,
                         prediction_ridge=args.intrinsic_surprise_prediction_ridge,
                         persistence_power=args.intrinsic_surprise_persistence_power,
@@ -4054,6 +4112,43 @@ def run_intrinsic_surprise_writes(
                     )
                 except ValueError as exc:
                     if "No nonzero relational aggregate examples" in str(exc):
+                        continue
+                    raise
+            elif args.intrinsic_surprise_target_mode == "global_coherence_relational":
+                try:
+                    selection = select_intrinsic_global_coherence_relational_write(
+                        usable_keys,
+                        layer,
+                        down_weight,
+                        scoring_keys=scoring_usable_keys,
+                        token_mode=args.intrinsic_surprise_token_mode,
+                        top_tokens=args.intrinsic_surprise_top_tokens,
+                        feature_top_k=args.intrinsic_surprise_feature_top_k,
+                        key_feature_top_k=args.intrinsic_surprise_key_feature_top_k,
+                        value_feature_top_k=args.intrinsic_surprise_value_feature_top_k,
+                        pair_top_k=args.intrinsic_surprise_pair_top_k,
+                        pair_score_quantile=args.intrinsic_surprise_pair_quantile,
+                        row_score_quantile=args.intrinsic_surprise_row_quantile,
+                        bidirectional_pairs=args.intrinsic_surprise_bidirectional_pairs,
+                        relation_value_mode=args.intrinsic_surprise_relation_value_mode,
+                        relation_context_target_mode=args.intrinsic_surprise_context_target_mode,
+                        target_scale=args.intrinsic_surprise_target_scale,
+                        context_rank=args.global_coherence_context_rank,
+                        position_rank=args.global_coherence_position_rank,
+                        coherence_ridge=args.global_coherence_ridge,
+                        support_power=args.global_coherence_support_power,
+                        min_support_gain=args.global_coherence_min_support_gain,
+                        persistence_power=args.intrinsic_surprise_persistence_power,
+                        persistence_threshold_fraction=args.intrinsic_surprise_persistence_threshold,
+                        persistence_min_tokens=args.intrinsic_surprise_persistence_min_tokens,
+                        feature_weights=feature_weights,
+                        target_projection_basis=target_projection_basis,
+                        surprise_weight_mode=args.intrinsic_surprise_weight_mode,
+                        surprise_weight_temperature=args.intrinsic_surprise_exp_temperature,
+                        surprise_weight_cap=args.intrinsic_surprise_exp_cap,
+                    )
+                except ValueError as exc:
+                    if "No nonzero global coherence relational examples" in str(exc):
                         continue
                     raise
             elif args.intrinsic_surprise_target_mode == "compatibility_residual":
@@ -4196,6 +4291,42 @@ def run_intrinsic_surprise_writes(
                 targets = args.intrinsic_surprise_target_scale * logit_error_targets[selection.token_indices]
                 loss_weights = token_losses[selection.token_indices]
                 positive_weights = positive_weights * (loss_weights / loss_weights.mean().clamp_min(1e-12))
+            gsci_result = None
+            if args.intrinsic_target_purifier == "gsci":
+                gsci_result = gsci_transform_targets(
+                    keys=selection.keys,
+                    targets=targets,
+                    weights=positive_weights,
+                    all_outputs=captures[layer_idx].outputs[: usable_keys.shape[0]],
+                    token_indices=selection.token_indices,
+                    down_weight=effective_down_weight(wrapper),
+                    output_basis=output_penalty_basis,
+                    graph_top_k=args.gsci_graph_top_k,
+                    smooth_gamma=args.gsci_smooth_gamma,
+                    gate_temperature=args.gsci_gate_temperature,
+                    gate_cap=args.gsci_gate_cap,
+                    gate_floor=args.gsci_gate_floor,
+                    row_nuisance_rank=args.gsci_row_nuisance_rank,
+                    value_nuisance_rank=args.gsci_value_nuisance_rank,
+                    low_innovation_quantile=args.gsci_low_innovation_quantile,
+                    capture_mode=args.gsci_capture_mode,
+                    latent_basis_mode=args.gsci_latent_basis_mode,
+                    object_row_rank=args.gsci_object_row_rank,
+                    object_value_rank=args.gsci_object_value_rank,
+                    object_quantile=args.gsci_object_quantile,
+                    latent_temperature=args.gsci_latent_temperature,
+                    value_target_mode=args.gsci_value_target_mode,
+                    value_residual_floor=args.gsci_value_residual_floor,
+                    schur_weight=args.gsci_schur_weight,
+                    schur_mode=args.gsci_schur_mode,
+                    disable_schur=args.gsci_disable_schur,
+                    shuffle_graph=args.gsci_shuffle_graph,
+                )
+                targets = gsci_result.targets
+                positive_weights = gsci_result.weights
+                if selection.diagnostics is None:
+                    selection.diagnostics = {}
+                selection.diagnostics.update(gsci_result.diagnostics)
             uncapped_target_fro = float(torch.linalg.vector_norm(targets.float()).item())
             target_center_norm = 0.0
             if args.intrinsic_surprise_center_targets:
@@ -4229,7 +4360,31 @@ def run_intrinsic_surprise_writes(
             use_metric_solve = (
                 output_penalty_basis is not None and args.intrinsic_surprise_output_penalty_weight > 0
             )
-            if use_metric_solve:
+            if (
+                args.intrinsic_target_purifier == "gsci"
+                and args.gsci_schur_mode == "design"
+                and not args.gsci_disable_schur
+                and gsci_result is not None
+            ):
+                update, stats, gsci_design_diagnostics = gsci_design_solve_update(
+                    keys=selection.keys,
+                    targets=targets,
+                    positive_weights=positive_weights,
+                    row_basis=gsci_result.row_basis,
+                    value_basis=gsci_result.value_basis,
+                    negative_keys=negative_keys,
+                    output_penalty_basis=output_penalty_basis,
+                    ridge=args.ridge,
+                    negative_weight=args.intrinsic_surprise_input_penalty_weight,
+                    output_penalty_weight=args.intrinsic_surprise_output_penalty_weight,
+                    ghost_ridge=args.gsci_ghost_ridge,
+                    eta=args.eta,
+                    max_update_norm=args.max_update_norm,
+                )
+                if selection.diagnostics is None:
+                    selection.diagnostics = {}
+                selection.diagnostics.update(gsci_design_diagnostics)
+            elif use_metric_solve:
                 update, stats = protected_metric_update(
                     selection.keys,
                     targets,
@@ -4293,6 +4448,44 @@ def run_intrinsic_surprise_writes(
                 if selection.diagnostics is None:
                     selection.diagnostics = {}
                 selection.diagnostics.update(karp.diagnostics)
+            elif args.intrinsic_target_purifier == "tgvq":
+                future_outputs: list[torch.Tensor] = []
+                if args.tgvq_horizon > 0:
+                    for future_idx in sorted(idx for idx in captures if idx > layer_idx)[: args.tgvq_horizon]:
+                        future_outputs.append(captures[future_idx].outputs[: usable_keys.shape[0]])
+                tgvq = tgvq_purify_update(
+                    update,
+                    keys=selection.keys,
+                    targets=targets,
+                    weights=positive_weights,
+                    all_outputs=captures[layer_idx].outputs[: usable_keys.shape[0]],
+                    token_indices=selection.token_indices,
+                    down_weight=effective_down_weight(wrapper),
+                    future_outputs=future_outputs,
+                    negative_keys=negative_keys,
+                    output_basis=output_penalty_basis,
+                    observer_rank=args.tgvq_observer_rank,
+                    object_row_rank=args.tgvq_object_row_rank,
+                    ghost_row_rank=args.tgvq_ghost_row_rank,
+                    object_signature_rank=args.tgvq_object_signature_rank,
+                    ghost_signature_rank=args.tgvq_ghost_signature_rank,
+                    graph_top_k=args.tgvq_graph_top_k,
+                    ghost_penalty=args.tgvq_ghost_penalty,
+                    object_preserve=args.tgvq_object_preserve,
+                    correction_cap=args.tgvq_correction_cap,
+                    ridge=args.ridge,
+                    negative_weight=args.intrinsic_surprise_input_penalty_weight,
+                )
+                update = tgvq.update
+                fit = selection.keys.detach().float() @ update.T
+                stats.fit_rmse = float(torch.sqrt(torch.mean((fit - targets.detach().float()).square())).item())
+                stats.update_fro = float(torch.linalg.vector_norm(update).item())
+                if negative_keys is not None and negative_keys.numel() > 0:
+                    neg_fit = negative_keys.detach().float() @ update.T
+                    stats.negative_rmse = float(torch.sqrt(torch.mean(neg_fit.square())).item())
+                if selection.diagnostics is None:
+                    selection.diagnostics = {}
+                selection.diagnostics.update(tgvq.diagnostics)
             elif args.intrinsic_target_purifier == "sharp_karp":
                 sharp = sharp_karp_purify_update(
                     update,
@@ -5239,8 +5432,47 @@ def run_intrinsic_surprise_writes(
                     "intrinsic_exp_cap": args.intrinsic_surprise_exp_cap,
                     "intrinsic_prediction_ridge": args.intrinsic_surprise_prediction_ridge,
                     "intrinsic_pair_top_k": args.intrinsic_surprise_pair_top_k,
+                    "intrinsic_pair_quantile": args.intrinsic_surprise_pair_quantile,
+                    "intrinsic_row_quantile": args.intrinsic_surprise_row_quantile,
                     "intrinsic_bidirectional_pairs": bool(args.intrinsic_surprise_bidirectional_pairs),
                     "intrinsic_relation_value_mode": args.intrinsic_surprise_relation_value_mode,
+                    "intrinsic_context_target_mode": args.intrinsic_surprise_context_target_mode,
+                    "global_coherence_context_rank_arg": args.global_coherence_context_rank,
+                    "global_coherence_position_rank_arg": args.global_coherence_position_rank,
+                    "global_coherence_ridge_arg": args.global_coherence_ridge,
+                    "global_coherence_support_power_arg": args.global_coherence_support_power,
+                    "global_coherence_min_support_gain_arg": args.global_coherence_min_support_gain,
+                    "gsci_graph_top_k": getattr(args, "gsci_graph_top_k", 0),
+                    "gsci_smooth_gamma": getattr(args, "gsci_smooth_gamma", 0.0),
+                    "gsci_gate_temperature": getattr(args, "gsci_gate_temperature", 0.0),
+                    "gsci_gate_cap": getattr(args, "gsci_gate_cap", 0.0),
+                    "gsci_gate_floor": getattr(args, "gsci_gate_floor", 0.0),
+                    "gsci_row_nuisance_rank": getattr(args, "gsci_row_nuisance_rank", 0),
+                    "gsci_value_nuisance_rank": getattr(args, "gsci_value_nuisance_rank", 0),
+                    "gsci_low_innovation_quantile": getattr(args, "gsci_low_innovation_quantile", 0.0),
+                    "gsci_capture_mode": getattr(args, "gsci_capture_mode", ""),
+                    "gsci_latent_basis_mode": getattr(args, "gsci_latent_basis_mode", ""),
+                    "gsci_object_row_rank": getattr(args, "gsci_object_row_rank", 0),
+                    "gsci_object_value_rank": getattr(args, "gsci_object_value_rank", 0),
+                    "gsci_object_quantile": getattr(args, "gsci_object_quantile", 0.0),
+                    "gsci_latent_temperature": getattr(args, "gsci_latent_temperature", 0.0),
+                    "gsci_value_target_mode": getattr(args, "gsci_value_target_mode", ""),
+                    "gsci_value_residual_floor": getattr(args, "gsci_value_residual_floor", 0.0),
+                    "gsci_schur_weight": getattr(args, "gsci_schur_weight", 0.0),
+                    "gsci_schur_mode": getattr(args, "gsci_schur_mode", ""),
+                    "gsci_ghost_ridge": getattr(args, "gsci_ghost_ridge", 0.0),
+                    "gsci_disable_schur": bool(getattr(args, "gsci_disable_schur", False)),
+                    "gsci_shuffle_graph": bool(getattr(args, "gsci_shuffle_graph", False)),
+                    "tgvq_observer_rank": getattr(args, "tgvq_observer_rank", 0),
+                    "tgvq_object_row_rank": getattr(args, "tgvq_object_row_rank", 0),
+                    "tgvq_ghost_row_rank": getattr(args, "tgvq_ghost_row_rank", 0),
+                    "tgvq_object_signature_rank": getattr(args, "tgvq_object_signature_rank", 0),
+                    "tgvq_ghost_signature_rank": getattr(args, "tgvq_ghost_signature_rank", 0),
+                    "tgvq_graph_top_k": getattr(args, "tgvq_graph_top_k", 0),
+                    "tgvq_horizon": getattr(args, "tgvq_horizon", 0),
+                    "tgvq_ghost_penalty": getattr(args, "tgvq_ghost_penalty", 0.0),
+                    "tgvq_object_preserve": getattr(args, "tgvq_object_preserve", 0.0),
+                    "tgvq_correction_cap": getattr(args, "tgvq_correction_cap", 0.0),
                     "wicr_compatibility_threshold": getattr(args, "wicr_compatibility_threshold", 0.0),
                     "wicr_compatibility_temperature": getattr(args, "wicr_compatibility_temperature", 0.0),
                     "wicr_posture_pcs": getattr(args, "wicr_posture_pcs", 0),

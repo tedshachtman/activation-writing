@@ -14,6 +14,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from caic.modeling import AdditiveMemoryLinear
+from caic.tsoc import TSOCUpdateStats, protected_metric_update
 
 
 @dataclass
@@ -220,6 +221,26 @@ class CageCeResult:
     Schur-residualized coherence target while ambient/default graph
     functionals stay near zero.
     """
+
+    update: torch.Tensor
+    diagnostics: dict[str, float]
+
+
+@dataclass
+class GsciTransformResult:
+    """GSCI target/weight transform for relational context-value writes."""
+
+    targets: torch.Tensor
+    weights: torch.Tensor
+    gates: torch.Tensor
+    diagnostics: dict[str, float]
+    row_basis: torch.Tensor | None = None
+    value_basis: torch.Tensor | None = None
+
+
+@dataclass
+class TgvqPurificationResult:
+    """TGVQ post-solve transported graph-value quotient update."""
 
     update: torch.Tensor
     diagnostics: dict[str, float]
@@ -4557,6 +4578,859 @@ def _tagce_ridge_map(
     return (x.T @ coeff).contiguous()
 
 
+def _gsci_row_pca_modes(rows: torch.Tensor, *, rank: int, n_rows: int) -> torch.Tensor:
+    if rank <= 0 or rows.numel() == 0:
+        return torch.empty(0, n_rows, dtype=torch.float32)
+    rows_f = torch.nan_to_num(rows.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    if rows_f.ndim != 2 or rows_f.shape[0] != n_rows or min(rows_f.shape) <= 1:
+        return torch.empty(0, n_rows, dtype=torch.float32)
+    centered = rows_f - rows_f.mean(dim=0, keepdim=True)
+    if float(torch.linalg.vector_norm(centered).item()) <= 1e-12:
+        return torch.empty(0, n_rows, dtype=torch.float32)
+    try:
+        u, _s, _vh = torch.linalg.svd(centered, full_matrices=False)
+    except RuntimeError:
+        return torch.empty(0, n_rows, dtype=torch.float32)
+    keep = min(int(rank), u.shape[1])
+    if keep <= 0:
+        return torch.empty(0, n_rows, dtype=torch.float32)
+    return F.normalize(u[:, :keep].T, dim=1).contiguous()
+
+
+def gsci_transform_targets(
+    *,
+    keys: torch.Tensor,
+    targets: torch.Tensor,
+    weights: torch.Tensor,
+    all_outputs: torch.Tensor,
+    token_indices: torch.Tensor,
+    down_weight: torch.Tensor,
+    output_basis: torch.Tensor | None = None,
+    graph_top_k: int = 8,
+    smooth_gamma: float = 0.35,
+    gate_temperature: float = 0.75,
+    gate_cap: float = 20.0,
+    gate_floor: float = 0.05,
+    row_nuisance_rank: int = 16,
+    value_nuisance_rank: int = 32,
+    low_innovation_quantile: float = 0.35,
+    capture_mode: str = "innovation",
+    latent_basis_mode: str = "shared",
+    object_row_rank: int = 16,
+    object_value_rank: int = 32,
+    object_quantile: float = 0.75,
+    latent_temperature: float = 1.0,
+    value_target_mode: str = "full",
+    value_residual_floor: float = 1.0,
+    schur_weight: float = 1.0,
+    schur_mode: str = "residualize",
+    disable_schur: bool = False,
+    shuffle_graph: bool = False,
+    eps: float = 1e-6,
+) -> GsciTransformResult:
+    """Current-context graph-supported conditional innovation transform.
+
+    GSCI keeps the existing relational/context-value carrier as the value being
+    written. The context graph only gates rows whose target is both locally
+    innovative and graph-supported. ``tag_capture`` mode uses the coherence
+    residual as a precision-weighted plasticity allocator rather than as write
+    content. In ``residualize`` mode an approximate Schur ghost is subtracted
+    from the target; in ``design`` mode the ghost bases are returned so the
+    solve can fit and discard the nuisance field inside the closed-form design.
+    """
+
+    k = torch.nan_to_num(keys.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    y = torch.nan_to_num(targets.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    w = torch.nan_to_num(weights.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+    all_h = torch.nan_to_num(all_outputs.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    tok = token_indices.detach().cpu().long()
+    down = torch.nan_to_num(down_weight.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    if k.ndim != 2 or y.ndim != 2 or k.shape[0] != y.shape[0]:
+        raise ValueError("GSCI keys and targets must be [n,m] and [n,d] with matching rows")
+    n_rows, d_model = y.shape
+    if n_rows == 0:
+        return GsciTransformResult(y, w, torch.empty(0, dtype=torch.float32), {"gsci_enabled": 1.0})
+    if w.ndim != 1 or w.shape[0] != n_rows:
+        raise ValueError("GSCI weights must align with selected rows")
+    if all_h.ndim != 2 or all_h.shape[1] != d_model or tok.numel() < n_rows:
+        h = y
+    else:
+        safe_tok = tok[:n_rows].clamp(min=0, max=max(all_h.shape[0] - 1, 0))
+        h = all_h.index_select(0, safe_tok)
+
+    node_parts = [
+        F.normalize(k, dim=1),
+        F.normalize(y, dim=1),
+        F.normalize(h, dim=1),
+    ]
+    node = torch.cat(node_parts, dim=1)
+    sim = torch.nan_to_num(node @ node.T, nan=0.0, posinf=0.0, neginf=0.0)
+    if tok.numel() >= n_rows and n_rows > 1:
+        pos = tok[:n_rows].float()
+        dist = (pos[:, None] - pos[None, :]).abs()
+        sim = sim - 0.02 * torch.log1p(dist)
+    sim.fill_diagonal_(-1e9)
+    if n_rows == 1:
+        p = torch.ones(1, 1, dtype=torch.float32)
+    else:
+        keep = max(1, min(int(graph_top_k), n_rows - 1))
+        vals, idx = torch.topk(sim, k=keep, dim=1)
+        logits = vals - vals.max(dim=1, keepdim=True).values
+        row = torch.softmax(logits, dim=1)
+        w_graph = torch.zeros(n_rows, n_rows, dtype=torch.float32)
+        w_graph.scatter_(1, idx, row)
+        w_graph = 0.5 * (w_graph + w_graph.T)
+        if shuffle_graph and n_rows > 2:
+            w_graph = torch.roll(w_graph, shifts=1, dims=1)
+            w_graph.fill_diagonal_(0.0)
+        denom = w_graph.sum(dim=1, keepdim=True).clamp_min(float(eps))
+        p = w_graph / denom
+
+    w_sym = 0.5 * (p + p.T)
+    degree = w_sym.sum(dim=1).clamp_min(float(eps))
+    p_sym = (degree.rsqrt().unsqueeze(1) * w_sym) * degree.rsqrt().unsqueeze(0)
+    eye = torch.eye(n_rows, dtype=torch.float32)
+    lap = eye - p_sym
+    innovation = lap @ y
+    system = eye + max(float(smooth_gamma), 0.0) * lap
+    supported = _solve_symmetric_psd(system, innovation)
+    base_score = torch.linalg.vector_norm(supported, dim=1).square() / (
+        torch.linalg.vector_norm(y, dim=1).square() + float(eps)
+    )
+    score = base_score
+
+    row_parts: list[torch.Tensor | None] = [torch.ones(1, n_rows, dtype=torch.float32)]
+    if n_rows > 1 and int(row_nuisance_rank) > 1:
+        try:
+            evals, evecs = torch.linalg.eigh(lap)
+            order = torch.argsort(evals, descending=False)
+            low_keep = min(max(0, int(row_nuisance_rank) // 3), max(0, n_rows - 1))
+            if low_keep > 0:
+                row_parts.append(evecs[:, order[:low_keep]].T)
+        except RuntimeError:
+            pass
+        if tok.numel() >= n_rows:
+            pos = tok[:n_rows].float()
+            pos = (pos - pos.mean()) / pos.std(unbiased=False).clamp_min(float(eps))
+            row_parts.append(pos.unsqueeze(0))
+        row_norm = torch.linalg.vector_norm(k, dim=1)
+        target_norm = torch.linalg.vector_norm(y, dim=1)
+        norm_modes = torch.stack(
+            [
+                row_norm - row_norm.mean(),
+                target_norm - target_norm.mean(),
+            ],
+            dim=0,
+        )
+        row_parts.append(norm_modes)
+        pca_keep = max(0, int(row_nuisance_rank) - 1 - sum(part.shape[0] for part in row_parts if part is not None))
+        if pca_keep > 0:
+            row_parts.append(_gsci_row_pca_modes(k, rank=pca_keep, n_rows=n_rows))
+    row_basis = _orthonormal_basis(row_parts, n_rows)[: max(0, min(int(row_nuisance_rank), n_rows))]
+
+    low_count = 0
+    low_rows = torch.empty(0, d_model, dtype=torch.float32)
+    if n_rows > 1:
+        q = min(max(float(low_innovation_quantile), 0.0), 1.0)
+        threshold = torch.quantile(base_score, q)
+        low_mask = base_score <= threshold
+        low_rows = y[low_mask]
+        low_count = int(low_mask.sum().item())
+    value_parts: list[torch.Tensor | None] = []
+    if output_basis is not None and output_basis.numel() > 0:
+        out = torch.nan_to_num(output_basis.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+        if out.ndim == 2 and out.shape[1] == d_model:
+            value_parts.append(out[: max(0, int(value_nuisance_rank))])
+    if down.ndim == 2 and down.shape[0] == d_model:
+        remaining = max(0, int(value_nuisance_rank) - sum(part.shape[0] for part in value_parts if part is not None))
+        value_parts.append(_fast_basis_with_rows(down.T, remaining, d_model))
+    remaining = max(0, int(value_nuisance_rank) - sum(part.shape[0] for part in value_parts if part is not None))
+    if remaining > 0 and low_rows.numel() > 0:
+        value_parts.append(_fast_basis_with_rows(low_rows, remaining, d_model))
+    if remaining > 0:
+        value_parts.append(y.mean(dim=0, keepdim=True))
+    value_basis = _orthonormal_basis(value_parts, d_model)[: max(0, min(int(value_nuisance_rank), d_model))]
+
+    capture_mode = str(capture_mode)
+    latent_basis_mode = str(latent_basis_mode)
+    precision = torch.ones(n_rows, dtype=torch.float32)
+    allocation = torch.ones(n_rows, dtype=torch.float32)
+    latent_gate = torch.ones(n_rows, dtype=torch.float32)
+    object_energy = base_score
+    posture_energy = torch.zeros_like(base_score)
+    object_latent_row_rank = 0
+    object_latent_value_rank = 0
+    object_value_basis_for_target = torch.empty(0, d_model, dtype=torch.float32)
+    if capture_mode == "tag_capture":
+        ghost_eps = torch.zeros_like(supported)
+        if row_basis.numel() > 0 and value_basis.numel() > 0:
+            ghost_eps = row_basis.T @ (row_basis @ supported @ value_basis.T) @ value_basis
+        denom = torch.linalg.vector_norm(y, dim=1).square() + float(eps)
+        object_basis_rows = torch.empty(0, n_rows, dtype=torch.float32)
+        object_value_basis = torch.empty(0, d_model, dtype=torch.float32)
+        if latent_basis_mode == "separate" and n_rows > 1:
+            q_obj = min(max(float(object_quantile), 0.0), 1.0)
+            threshold_obj = torch.quantile(base_score, q_obj)
+            high_mask = base_score >= threshold_obj
+            if int(high_mask.sum().item()) <= 0:
+                high_mask[int(torch.argmax(base_score).item())] = True
+            high_idx = torch.nonzero(high_mask, as_tuple=False).flatten()
+            high_indicator = high_mask.float().unsqueeze(0)
+            neighborhood_rows = p.index_select(0, high_idx)
+            reverse_neighborhood_rows = p[:, high_idx].T
+            object_basis_rows = _orthonormal_basis(
+                [high_indicator, neighborhood_rows, reverse_neighborhood_rows],
+                n_rows,
+            )[: max(0, min(int(object_row_rank), n_rows))]
+            object_value_basis = _orthonormal_basis(
+                [
+                    y.index_select(0, high_idx),
+                    supported.index_select(0, high_idx),
+                    (y.index_select(0, high_idx).mean(dim=0, keepdim=True) if high_idx.numel() > 0 else None),
+                ],
+                d_model,
+            )[: max(0, min(int(object_value_rank), d_model))]
+        if object_basis_rows.numel() > 0 and object_value_basis.numel() > 0:
+            object_latent_row_rank = int(object_basis_rows.shape[0])
+            object_latent_value_rank = int(object_value_basis.shape[0])
+            object_value_basis_for_target = object_value_basis
+            object_proj = object_basis_rows.T @ (
+                object_basis_rows @ supported @ object_value_basis.T
+            ) @ object_value_basis
+            object_residual = torch.linalg.vector_norm(supported - object_proj, dim=1).square() / denom
+            posture_residual = torch.linalg.vector_norm(supported - ghost_eps, dim=1).square() / denom
+            latent_gate = torch.sigmoid(
+                (
+                    torch.log(posture_residual + float(eps))
+                    - torch.log(object_residual + float(eps))
+                )
+                / max(float(latent_temperature), float(eps))
+            )
+            object_energy = torch.linalg.vector_norm(object_proj, dim=1).square() / denom
+            posture_energy = torch.linalg.vector_norm(ghost_eps, dim=1).square() / denom
+        else:
+            object_eps = supported - ghost_eps
+            object_energy = torch.linalg.vector_norm(object_eps, dim=1).square() / denom
+            posture_energy = torch.linalg.vector_norm(ghost_eps, dim=1).square() / denom
+            latent_gate = torch.sigmoid(torch.log(object_energy + float(eps)) - torch.log(posture_energy + float(eps)))
+        effective_neighbors = 1.0 / p.clamp_min(0.0).square().sum(dim=1).clamp_min(float(eps))
+        neighbor_disagreement = p.clamp_min(0.0) @ (
+            torch.linalg.vector_norm(supported, dim=1).square()
+        )
+        precision_raw = effective_neighbors / neighbor_disagreement.clamp_min(float(eps))
+        precision = precision_raw / precision_raw.median().clamp_min(float(eps))
+        if down.ndim == 2 and down.shape[1] == k.shape[1]:
+            col_energy = torch.linalg.vector_norm(down, dim=0).square()
+            col_energy = col_energy / col_energy.median().clamp_min(float(eps))
+            key_mass = k.abs()
+            key_alloc = (key_mass * col_energy.unsqueeze(0)).sum(dim=1) / key_mass.sum(dim=1).clamp_min(float(eps))
+            key_alloc = key_alloc / key_alloc.median().clamp_min(float(eps))
+        else:
+            key_alloc = torch.ones(n_rows, dtype=torch.float32)
+        if value_basis.numel() > 0:
+            value_proj = y @ value_basis.T @ value_basis
+            value_non_generic = torch.linalg.vector_norm(y - value_proj, dim=1).square() / denom
+        else:
+            value_non_generic = torch.ones(n_rows, dtype=torch.float32)
+        allocation = key_alloc.sqrt().clamp(max=4.0) * (0.5 + 0.5 * value_non_generic.clamp(max=2.0))
+        score = (base_score * precision.clamp(max=8.0) * allocation.clamp(max=8.0) * latent_gate).clamp_min(float(eps))
+    elif capture_mode != "innovation":
+        raise ValueError(f"Unknown GSCI capture_mode: {capture_mode}")
+
+    gates = _robust_exp_gate(
+        score,
+        temperature=gate_temperature,
+        cap=gate_cap,
+        floor=gate_floor,
+        eps=eps,
+    )
+    w_new = w * gates
+    w_new = w_new / w_new.mean().clamp_min(float(eps))
+    value_target_mode = str(value_target_mode)
+    y_carrier = y
+    value_bandpass_residual_ratio = 1.0
+    if value_target_mode == "object_bandpass":
+        if object_value_basis_for_target.numel() > 0:
+            projected = y @ object_value_basis_for_target.T @ object_value_basis_for_target
+            residual = y - projected
+            floor = min(max(float(value_residual_floor), 0.0), 1.0)
+            y_carrier = projected + floor * residual
+            value_bandpass_residual_ratio = float(
+                torch.linalg.vector_norm(floor * residual).square().item()
+                / max(float(torch.linalg.vector_norm(y_carrier).square().item()), float(eps))
+            )
+    elif value_target_mode != "full":
+        raise ValueError(f"Unknown GSCI value_target_mode: {value_target_mode}")
+    y_star = gates.unsqueeze(1) * y_carrier
+
+    if schur_mode not in {"residualize", "design"}:
+        raise ValueError(f"Unknown GSCI schur_mode: {schur_mode}")
+    y_out = y_star
+    ghost = torch.zeros_like(y_star)
+    if (
+        schur_mode == "residualize"
+        and not disable_schur
+        and row_basis.numel() > 0
+        and value_basis.numel() > 0
+        and float(schur_weight) != 0.0
+    ):
+        coeff = row_basis @ y_star @ value_basis.T
+        ghost = row_basis.T @ coeff @ value_basis
+        y_out = y_star - float(schur_weight) * ghost
+    elif row_basis.numel() > 0 and value_basis.numel() > 0:
+        coeff = row_basis @ y_star @ value_basis.T
+        ghost = row_basis.T @ coeff @ value_basis
+
+    target_before = float(torch.linalg.vector_norm(y).item())
+    target_star = float(torch.linalg.vector_norm(y_star).item())
+    target_after = float(torch.linalg.vector_norm(y_out).item())
+    ghost_norm = float(torch.linalg.vector_norm(ghost).item())
+    diagnostics = {
+        "gsci_enabled": 1.0,
+        "gsci_rows": float(n_rows),
+        "gsci_graph_top_k": float(max(0, int(graph_top_k))),
+        "gsci_smooth_gamma": float(smooth_gamma),
+        "gsci_gate_mean": float(gates.mean().item()),
+        "gsci_gate_min": float(gates.min().item()),
+        "gsci_gate_max": float(gates.max().item()),
+        "gsci_score_mean": float(score.mean().item()),
+        "gsci_score_max": float(score.max().item()),
+        "gsci_base_score_mean": float(base_score.mean().item()),
+        "gsci_base_score_max": float(base_score.max().item()),
+        "gsci_capture_mode_tag_capture": 1.0 if capture_mode == "tag_capture" else 0.0,
+        "gsci_capture_precision_mean": float(precision.mean().item()),
+        "gsci_capture_precision_max": float(precision.max().item()),
+        "gsci_capture_allocation_mean": float(allocation.mean().item()),
+        "gsci_capture_latent_gate_mean": float(latent_gate.mean().item()),
+        "gsci_capture_latent_gate_min": float(latent_gate.min().item()),
+        "gsci_capture_latent_gate_max": float(latent_gate.max().item()),
+        "gsci_capture_separate_latent": 1.0 if latent_basis_mode == "separate" else 0.0,
+        "gsci_capture_object_row_rank": float(object_latent_row_rank),
+        "gsci_capture_object_value_rank": float(object_latent_value_rank),
+        "gsci_value_target_object_bandpass": 1.0 if value_target_mode == "object_bandpass" else 0.0,
+        "gsci_value_residual_floor": float(value_residual_floor),
+        "gsci_value_bandpass_residual_ratio": float(value_bandpass_residual_ratio),
+        "gsci_capture_object_energy_mean": float(object_energy.mean().item()),
+        "gsci_capture_posture_energy_mean": float(posture_energy.mean().item()),
+        "gsci_low_innovation_rows": float(low_count),
+        "gsci_row_nuisance_rank": float(row_basis.shape[0]),
+        "gsci_value_nuisance_rank": float(value_basis.shape[0]),
+        "gsci_schur_absorbed_ratio": float((ghost_norm * ghost_norm) / max(target_star * target_star, float(eps))),
+        "gsci_target_fro_before": target_before,
+        "gsci_target_fro_gated": target_star,
+        "gsci_target_fro_after": target_after,
+        "gsci_shuffle_graph": 1.0 if shuffle_graph else 0.0,
+        "gsci_disable_schur": 1.0 if disable_schur else 0.0,
+        "gsci_schur_mode_design": 1.0 if schur_mode == "design" else 0.0,
+    }
+    return GsciTransformResult(
+        targets=torch.nan_to_num(y_out, nan=0.0, posinf=0.0, neginf=0.0).contiguous(),
+        weights=torch.nan_to_num(w_new, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0).contiguous(),
+        gates=gates.contiguous(),
+        diagnostics=diagnostics,
+        row_basis=row_basis.contiguous(),
+        value_basis=value_basis.contiguous(),
+    )
+
+
+def _gsci_schur_row_factor(
+    row_basis: torch.Tensor,
+    row_scale: torch.Tensor,
+    *,
+    ghost_ridge: float,
+    eps: float,
+) -> torch.Tensor:
+    """Return L such that ||L r||^2 is the row-ghost Schur residual energy."""
+
+    n_rows = row_scale.numel()
+    if row_basis.numel() == 0:
+        return torch.eye(n_rows, dtype=torch.float32)
+    rows = torch.nan_to_num(row_basis.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    if rows.ndim != 2 or rows.shape[1] != n_rows:
+        return torch.eye(n_rows, dtype=torch.float32)
+    ghost_rows = row_scale.unsqueeze(1) * rows.T
+    gram = ghost_rows.T @ ghost_rows + max(float(ghost_ridge), float(eps)) * torch.eye(
+        ghost_rows.shape[1], dtype=torch.float32
+    )
+    proj = ghost_rows @ _solve_symmetric_psd(gram, ghost_rows.T)
+    schur = torch.eye(n_rows, dtype=torch.float32) - 0.5 * (proj + proj.T)
+    schur = 0.5 * (schur + schur.T)
+    try:
+        vals, vecs = torch.linalg.eigh(schur)
+    except RuntimeError:
+        vals, vecs = torch.linalg.eigh(schur + float(eps) * torch.eye(n_rows, dtype=torch.float32))
+    keep = vals > max(float(eps), 1e-8)
+    if not torch.any(keep):
+        return torch.zeros(0, n_rows, dtype=torch.float32)
+    return (vals[keep].clamp_min(0.0).sqrt().unsqueeze(1) * vecs[:, keep].T).contiguous()
+
+
+def _gsci_design_coeff_update(
+    keys: torch.Tensor,
+    coeff_targets: torch.Tensor,
+    *,
+    positive_weights: torch.Tensor,
+    row_basis: torch.Tensor,
+    negative_keys: torch.Tensor | None,
+    ridge: float,
+    negative_weight: float,
+    output_penalty_weight: float,
+    ghost_ridge: float,
+    eps: float,
+) -> torch.Tensor:
+    k = torch.nan_to_num(keys.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    y = torch.nan_to_num(coeff_targets.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    w = torch.nan_to_num(positive_weights.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+    row_scale = w.sqrt()
+    k_pos = k * row_scale.unsqueeze(1)
+    y_pos = y * row_scale.unsqueeze(1)
+    factor = _gsci_schur_row_factor(row_basis, row_scale, ghost_ridge=ghost_ridge, eps=eps)
+    matrices: list[torch.Tensor] = []
+    values: list[torch.Tensor] = []
+    if factor.numel() > 0:
+        matrices.append(factor @ k_pos)
+        values.append(factor @ y_pos)
+    neg_scaled = torch.empty(0, k.shape[1], dtype=torch.float32)
+    if negative_keys is not None and negative_keys.numel() > 0 and negative_weight > 0:
+        neg = torch.nan_to_num(negative_keys.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+        if neg.ndim == 2 and neg.shape[1] == k.shape[1]:
+            neg_scaled = neg * float(negative_weight) ** 0.5
+            matrices.append(neg_scaled)
+            values.append(torch.zeros(neg_scaled.shape[0], y.shape[1], dtype=torch.float32))
+    if output_penalty_weight > 0:
+        penalty_rows = [k_pos]
+        if neg_scaled.numel() > 0:
+            penalty_rows.append(neg_scaled)
+        pen = torch.cat(penalty_rows, dim=0) * float(output_penalty_weight) ** 0.5
+        matrices.append(pen)
+        values.append(torch.zeros(pen.shape[0], y.shape[1], dtype=torch.float32))
+    if not matrices:
+        return torch.zeros(y.shape[1], k.shape[1], dtype=torch.float32)
+    x_all = torch.cat(matrices, dim=0)
+    y_all = torch.cat(values, dim=0)
+    system = x_all @ x_all.T + max(float(ridge), float(eps)) * torch.eye(x_all.shape[0], dtype=torch.float32)
+    return (y_all.T @ _solve_symmetric_psd(system, x_all)).contiguous()
+
+
+def gsci_design_solve_update(
+    *,
+    keys: torch.Tensor,
+    targets: torch.Tensor,
+    positive_weights: torch.Tensor,
+    row_basis: torch.Tensor | None,
+    value_basis: torch.Tensor | None,
+    negative_keys: torch.Tensor | None = None,
+    output_penalty_basis: torch.Tensor | None = None,
+    ridge: float = 1e-2,
+    negative_weight: float = 1.0,
+    output_penalty_weight: float = 0.0,
+    ghost_ridge: float = 1e-3,
+    eta: float = 1.0,
+    max_update_norm: float | None = None,
+    eps: float = 1e-6,
+) -> tuple[torch.Tensor, TSOCUpdateStats, dict[str, float]]:
+    """Closed-form GSCI design solve with a fitted-and-discarded ghost field."""
+
+    k = torch.nan_to_num(keys.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    y = torch.nan_to_num(targets.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    w = torch.nan_to_num(positive_weights.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+    if row_basis is None or value_basis is None or row_basis.numel() == 0 or value_basis.numel() == 0:
+        update, stats = protected_metric_update(
+            k,
+            y,
+            negative_keys=negative_keys,
+            output_penalty_basis=output_penalty_basis,
+            positive_weights=w,
+            ridge=ridge,
+            negative_weight=negative_weight,
+            output_penalty_weight=output_penalty_weight,
+            eta=eta,
+            max_update_norm=max_update_norm,
+        )
+        return update, stats, {"gsci_design_fallback": 1.0}
+    value_rows = torch.nan_to_num(value_basis.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    value_rows = _orthonormal_basis([value_rows], y.shape[1])
+    if value_rows.numel() == 0:
+        update, stats = protected_metric_update(
+            k,
+            y,
+            negative_keys=negative_keys,
+            output_penalty_basis=output_penalty_basis,
+            positive_weights=w,
+            ridge=ridge,
+            negative_weight=negative_weight,
+            output_penalty_weight=output_penalty_weight,
+            eta=eta,
+            max_update_norm=max_update_norm,
+        )
+        return update, stats, {"gsci_design_fallback": 1.0}
+
+    coeff_targets = y @ value_rows.T
+    residual_targets = y - coeff_targets @ value_rows
+    coeff_update = _gsci_design_coeff_update(
+        k,
+        coeff_targets,
+        positive_weights=w,
+        row_basis=row_basis,
+        negative_keys=negative_keys,
+        ridge=ridge,
+        negative_weight=negative_weight,
+        output_penalty_weight=output_penalty_weight,
+        ghost_ridge=ghost_ridge,
+        eps=eps,
+    )
+    ghost_update = value_rows.T @ coeff_update
+    residual_update, _residual_stats = protected_metric_update(
+        k,
+        residual_targets,
+        negative_keys=negative_keys,
+        output_penalty_basis=output_penalty_basis,
+        positive_weights=w,
+        ridge=ridge,
+        negative_weight=negative_weight,
+        output_penalty_weight=output_penalty_weight,
+        eta=1.0,
+        max_update_norm=None,
+    )
+    update = float(eta) * (ghost_update + residual_update)
+    if max_update_norm is not None and max_update_norm > 0:
+        norm = torch.linalg.vector_norm(update)
+        if float(norm.item()) > float(max_update_norm):
+            update = update * (float(max_update_norm) / norm.clamp_min(float(eps)))
+
+    fit = k @ update.T
+    fit_rmse = torch.sqrt(torch.mean((fit - y).square())).item()
+    neg_rows = 0
+    negative_rmse = 0.0
+    if negative_keys is not None and negative_keys.numel() > 0:
+        neg = torch.nan_to_num(negative_keys.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+        if neg.ndim == 2 and neg.shape[1] == k.shape[1]:
+            neg_rows = neg.shape[0]
+            neg_fit = neg @ update.T
+            negative_rmse = torch.sqrt(torch.mean(neg_fit.square())).item()
+    stats = TSOCUpdateStats(
+        positive_rows=k.shape[0],
+        negative_rows=neg_rows,
+        ridge=float(ridge),
+        negative_weight=float(negative_weight),
+        eta=float(eta),
+        update_fro=float(torch.linalg.vector_norm(update).item()),
+        target_fro=float(torch.linalg.vector_norm(y).item()),
+        fit_rmse=float(fit_rmse),
+        negative_rmse=float(negative_rmse),
+    )
+    coeff_target_norm = float(torch.linalg.vector_norm(coeff_targets).item())
+    residual_target_norm = float(torch.linalg.vector_norm(residual_targets).item())
+    diagnostics = {
+        "gsci_design_fallback": 0.0,
+        "gsci_design_value_rank": float(value_rows.shape[0]),
+        "gsci_design_ghost_ridge": float(ghost_ridge),
+        "gsci_design_coeff_target_fro": coeff_target_norm,
+        "gsci_design_residual_target_fro": residual_target_norm,
+        "gsci_design_coeff_update_fro": float(torch.linalg.vector_norm(ghost_update).item()),
+        "gsci_design_residual_update_fro": float(torch.linalg.vector_norm(residual_update).item()),
+    }
+    return update.contiguous(), stats, diagnostics
+
+
+def _tgvq_constraints_from_bases(
+    keys: torch.Tensor,
+    observer_basis: torch.Tensor,
+    row_basis: torch.Tensor,
+    signature_basis: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    k = torch.nan_to_num(keys.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    obs = torch.nan_to_num(observer_basis.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    rows = torch.nan_to_num(row_basis.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    sig = torch.nan_to_num(signature_basis.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    if rows.numel() == 0 or sig.numel() == 0 or obs.numel() == 0:
+        return torch.empty(0, k.shape[1], dtype=torch.float32), torch.empty(0, obs.shape[1], dtype=torch.float32)
+    if rows.ndim != 2 or rows.shape[0] != k.shape[0]:
+        raise ValueError("TGVQ row basis must be [n, r]")
+    if sig.ndim != 2 or obs.ndim != 2 or sig.shape[1] != obs.shape[0]:
+        raise ValueError("TGVQ signature basis must be [s, p] and observer basis [p, d]")
+    key_atoms = k.T @ rows
+    value_atoms = sig @ obs
+    g_parts: list[torch.Tensor] = []
+    c_parts: list[torch.Tensor] = []
+    for a in range(key_atoms.shape[1]):
+        g = key_atoms[:, a].unsqueeze(0).expand(value_atoms.shape[0], -1)
+        g_parts.append(g)
+        c_parts.append(value_atoms)
+    return torch.cat(g_parts, dim=0).contiguous(), torch.cat(c_parts, dim=0).contiguous()
+
+
+def tgvq_project_update(
+    update: torch.Tensor,
+    *,
+    keys: torch.Tensor,
+    observer_basis: torch.Tensor,
+    generic_row_basis: torch.Tensor,
+    object_row_basis: torch.Tensor,
+    generic_signature_basis: torch.Tensor,
+    object_signature_basis: torch.Tensor,
+    positive_weights: torch.Tensor | None = None,
+    negative_keys: torch.Tensor | None = None,
+    ridge: float = 1e-2,
+    negative_weight: float = 1.0,
+    ghost_penalty: float = 1.0,
+    object_preserve: float = 2.0,
+    correction_cap: float = 0.35,
+    eps: float = 1e-6,
+) -> TgvqPurificationResult:
+    """Project a row-major update using transported row-signature functionals."""
+
+    update_f = torch.nan_to_num(update.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    if update_f.ndim != 2:
+        raise ValueError("TGVQ update must be [d,m]")
+    m0 = update_f.T.contiguous()
+    k = torch.nan_to_num(keys.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    if k.ndim != 2 or k.shape[1] != m0.shape[0]:
+        raise ValueError("TGVQ keys do not match update shape")
+    obs = torch.nan_to_num(observer_basis.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    if obs.ndim != 2 or obs.shape[1] != m0.shape[1]:
+        raise ValueError("TGVQ observer basis must be [p,d]")
+    metric_rows: list[torch.Tensor] = []
+    if positive_weights is not None and positive_weights.numel() == k.shape[0]:
+        w = torch.nan_to_num(positive_weights.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+        metric_rows.append(k * w.sqrt().unsqueeze(1))
+    else:
+        metric_rows.append(k)
+    if negative_keys is not None and negative_keys.numel() > 0 and negative_weight > 0:
+        neg = torch.nan_to_num(negative_keys.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+        if neg.ndim == 2 and neg.shape[1] == k.shape[1]:
+            metric_rows.append(neg * float(negative_weight) ** 0.5)
+    left_metric_rows = torch.cat(metric_rows, dim=0)
+
+    g_g, c_g = _tgvq_constraints_from_bases(k, obs, generic_row_basis, generic_signature_basis)
+    g_o, c_o = _tgvq_constraints_from_bases(k, obs, object_row_basis, object_signature_basis)
+    parts_g: list[torch.Tensor] = []
+    parts_c: list[torch.Tensor] = []
+    parts_y: list[torch.Tensor] = []
+    parts_beta: list[torch.Tensor] = []
+    ghost_raw = torch.empty(0, dtype=torch.float32)
+    object_raw = torch.empty(0, dtype=torch.float32)
+    if g_g.numel() > 0 and ghost_penalty > 0:
+        ghost_raw = torch.einsum("qm,md,qd->q", g_g, m0, c_g)
+        parts_g.append(g_g)
+        parts_c.append(c_g)
+        parts_y.append(torch.zeros(g_g.shape[0], dtype=torch.float32))
+        parts_beta.append(torch.full((g_g.shape[0],), float(ghost_penalty), dtype=torch.float32))
+    if g_o.numel() > 0 and object_preserve > 0:
+        object_raw = torch.einsum("qm,md,qd->q", g_o, m0, c_o)
+        parts_g.append(g_o)
+        parts_c.append(c_o)
+        parts_y.append(object_raw)
+        parts_beta.append(torch.full((g_o.shape[0],), float(object_preserve), dtype=torch.float32))
+    if not parts_g:
+        return TgvqPurificationResult(update_f.contiguous(), {"tgvq_fallback": 1.0})
+    constraint_keys = torch.cat(parts_g, dim=0)
+    constraint_values = torch.cat(parts_c, dim=0)
+    constraint_targets = torch.cat(parts_y, dim=0)
+    betas = torch.cat(parts_beta, dim=0)
+    m_star = _rank_one_metric_project(
+        m0,
+        left_metric_rows=left_metric_rows,
+        constraint_keys=constraint_keys,
+        constraint_values=constraint_values,
+        targets=constraint_targets,
+        betas=betas,
+        ridge=ridge,
+        eps=eps,
+    )
+    correction = m_star - m0
+    correction_fro = float(torch.linalg.vector_norm(correction).item())
+    update_fro = float(torch.linalg.vector_norm(m0).item())
+    cap = max(float(correction_cap), 0.0)
+    cap_used = 0.0
+    if cap > 0 and correction_fro > cap * max(update_fro, float(eps)):
+        correction = correction * (cap * max(update_fro, float(eps)) / max(correction_fro, float(eps)))
+        m_star = m0 + correction
+        correction_fro = float(torch.linalg.vector_norm(correction).item())
+        cap_used = 1.0
+    ghost_after = (
+        torch.einsum("qm,md,qd->q", g_g, m_star, c_g) if g_g.numel() > 0 else torch.empty(0, dtype=torch.float32)
+    )
+    object_after = (
+        torch.einsum("qm,md,qd->q", g_o, m_star, c_o) if g_o.numel() > 0 else torch.empty(0, dtype=torch.float32)
+    )
+    ghost_before_norm = float(torch.linalg.vector_norm(ghost_raw).item()) if ghost_raw.numel() else 0.0
+    ghost_after_norm = float(torch.linalg.vector_norm(ghost_after).item()) if ghost_after.numel() else 0.0
+    object_before_norm = float(torch.linalg.vector_norm(object_raw).item()) if object_raw.numel() else 0.0
+    object_delta_norm = (
+        float(torch.linalg.vector_norm(object_after - object_raw).item())
+        if object_after.numel() and object_raw.numel()
+        else 0.0
+    )
+    diagnostics = {
+        "tgvq_fallback": 0.0,
+        "tgvq_observer_rank": float(obs.shape[0]),
+        "tgvq_generic_row_rank": float(generic_row_basis.shape[1]) if generic_row_basis.ndim == 2 else 0.0,
+        "tgvq_object_row_rank": float(object_row_basis.shape[1]) if object_row_basis.ndim == 2 else 0.0,
+        "tgvq_generic_signature_rank": float(generic_signature_basis.shape[0]) if generic_signature_basis.ndim == 2 else 0.0,
+        "tgvq_object_signature_rank": float(object_signature_basis.shape[0]) if object_signature_basis.ndim == 2 else 0.0,
+        "tgvq_num_ghost_constraints": float(g_g.shape[0]),
+        "tgvq_num_object_constraints": float(g_o.shape[0]),
+        "tgvq_ghost_norm_before": ghost_before_norm,
+        "tgvq_ghost_norm_after": ghost_after_norm,
+        "tgvq_ghost_ratio_after": float(ghost_after_norm / max(ghost_before_norm, float(eps))),
+        "tgvq_object_norm_before": object_before_norm,
+        "tgvq_object_delta_ratio": float(object_delta_norm / max(object_before_norm, float(eps))),
+        "tgvq_correction_fro": correction_fro,
+        "tgvq_correction_ratio": float(correction_fro / max(update_fro, float(eps))),
+        "tgvq_correction_cap_used": cap_used,
+    }
+    return TgvqPurificationResult(m_star.T.contiguous(), diagnostics)
+
+
+def tgvq_purify_update(
+    update: torch.Tensor,
+    *,
+    keys: torch.Tensor,
+    targets: torch.Tensor,
+    weights: torch.Tensor,
+    all_outputs: torch.Tensor,
+    token_indices: torch.Tensor,
+    down_weight: torch.Tensor,
+    future_outputs: list[torch.Tensor] | None = None,
+    negative_keys: torch.Tensor | None = None,
+    output_basis: torch.Tensor | None = None,
+    observer_rank: int = 64,
+    object_row_rank: int = 16,
+    ghost_row_rank: int = 12,
+    object_signature_rank: int = 16,
+    ghost_signature_rank: int = 16,
+    graph_top_k: int = 8,
+    ghost_penalty: float = 1.0,
+    object_preserve: float = 2.0,
+    correction_cap: float = 0.35,
+    ridge: float = 1e-2,
+    negative_weight: float = 1.0,
+    eps: float = 1e-6,
+) -> TgvqPurificationResult:
+    update_f = torch.nan_to_num(update.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    k = torch.nan_to_num(keys.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    y = torch.nan_to_num(targets.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    w = torch.nan_to_num(weights.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+    all_h = torch.nan_to_num(all_outputs.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    tok = token_indices.detach().cpu().long()
+    down = torch.nan_to_num(down_weight.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    if update_f.ndim != 2 or k.ndim != 2 or y.ndim != 2 or k.shape[0] != y.shape[0]:
+        raise ValueError("TGVQ shapes are invalid")
+    d_model, d_ff = update_f.shape
+    if k.shape[1] != d_ff or y.shape[1] != d_model:
+        raise ValueError("TGVQ keys/targets do not match update")
+    n_rows = k.shape[0]
+    if n_rows == 0:
+        return TgvqPurificationResult(update_f, {"tgvq_fallback": 1.0})
+    if all_h.ndim == 2 and all_h.shape[1] == d_model and tok.numel() >= n_rows:
+        h = all_h.index_select(0, tok[:n_rows].clamp(min=0, max=max(all_h.shape[0] - 1, 0)))
+    else:
+        h = y
+    node = torch.cat([F.normalize(k, dim=1), F.normalize(y, dim=1), F.normalize(h, dim=1)], dim=1)
+    sim = torch.nan_to_num(node @ node.T, nan=0.0, posinf=0.0, neginf=0.0)
+    sim.fill_diagonal_(-1e9)
+    if n_rows == 1:
+        p = torch.ones(1, 1, dtype=torch.float32)
+    else:
+        keep = max(1, min(int(graph_top_k), n_rows - 1))
+        vals, idx = torch.topk(sim, k=keep, dim=1)
+        row = torch.softmax(vals - vals.max(dim=1, keepdim=True).values, dim=1)
+        graph = torch.zeros(n_rows, n_rows, dtype=torch.float32)
+        graph.scatter_(1, idx, row)
+        graph = 0.5 * (graph + graph.T)
+        p = graph / graph.sum(dim=1, keepdim=True).clamp_min(float(eps))
+    lap = torch.eye(n_rows, dtype=torch.float32) - 0.5 * (p + p.T)
+    signal = torch.linalg.vector_norm(lap @ y, dim=1).square() / (
+        torch.linalg.vector_norm(y, dim=1).square() + float(eps)
+    )
+    high = signal >= torch.quantile(signal, 0.75) if n_rows > 1 else torch.ones_like(signal, dtype=torch.bool)
+    low = signal <= torch.quantile(signal, 0.35) if n_rows > 1 else torch.ones_like(signal, dtype=torch.bool)
+    high_idx = torch.nonzero(high, as_tuple=False).flatten()
+    low_idx = torch.nonzero(low, as_tuple=False).flatten()
+
+    row_g_parts: list[torch.Tensor | None] = [torch.ones(1, n_rows, dtype=torch.float32)]
+    if n_rows > 1:
+        try:
+            vals, vecs = torch.linalg.eigh(0.5 * (lap + lap.T))
+            order = torch.argsort(vals, descending=False)
+            row_g_parts.append(vecs[:, order[: max(1, min(int(ghost_row_rank) // 2, n_rows))]].T)
+        except RuntimeError:
+            pass
+        if low_idx.numel() > 0:
+            mask = torch.zeros(1, n_rows, dtype=torch.float32)
+            mask[0, low_idx] = 1.0
+            row_g_parts.append(mask)
+    generic_rows = _orthonormal_basis(row_g_parts, n_rows)[: max(0, min(int(ghost_row_rank), n_rows))].T
+    row_o_parts: list[torch.Tensor | None] = []
+    if high_idx.numel() > 0:
+        mask = torch.zeros(1, n_rows, dtype=torch.float32)
+        mask[0, high_idx] = 1.0
+        row_o_parts.extend([mask, p.index_select(0, high_idx), p[:, high_idx].T])
+    object_rows = _orthonormal_basis(row_o_parts, n_rows)[: max(0, min(int(object_row_rank), n_rows))].T
+
+    observer_parts: list[torch.Tensor | None] = []
+    if output_basis is not None and output_basis.numel() > 0:
+        out = torch.nan_to_num(output_basis.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+        if out.ndim == 2 and out.shape[1] == d_model:
+            observer_parts.append(out[: max(1, int(observer_rank) // 4)])
+    if high_idx.numel() > 0:
+        observer_parts.append(y.index_select(0, high_idx))
+        observer_parts.append((k @ update_f.T).index_select(0, high_idx))
+    if n_rows > 1:
+        edge_src = torch.arange(n_rows)
+        edge_dst = p.argmax(dim=1)
+        observer_parts.append(h.index_select(0, edge_dst) - h.index_select(0, edge_src))
+        observer_parts.append(y.index_select(0, edge_dst) - y.index_select(0, edge_src))
+    if future_outputs:
+        for future in future_outputs[:2]:
+            f = torch.nan_to_num(future.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+            if f.ndim == 2 and f.shape[1] == d_model and tok.numel() >= n_rows:
+                f_sel = f.index_select(0, tok[:n_rows].clamp(min=0, max=max(f.shape[0] - 1, 0)))
+                observer_parts.append(f_sel - h)
+                if n_rows > 1:
+                    observer_parts.append(f_sel.index_select(0, p.argmax(dim=1)) - f_sel)
+    if down.ndim == 2 and down.shape[0] == d_model:
+        observer_parts.append(_fast_basis_with_rows(down.T, max(1, int(observer_rank) // 4), d_model))
+    observer_basis = _orthonormal_basis(observer_parts, d_model)[: max(1, min(int(observer_rank), d_model))]
+    if observer_basis.numel() == 0:
+        return TgvqPurificationResult(update_f, {"tgvq_fallback": 1.0})
+    signature_source = k @ update_f.T
+    z = signature_source @ observer_basis.T
+    vg_raw = generic_rows.T @ z if generic_rows.numel() > 0 else torch.empty(0, observer_basis.shape[0])
+    generic_sig = _orthonormal_basis([vg_raw], observer_basis.shape[0])[: max(0, min(int(ghost_signature_rank), observer_basis.shape[0]))]
+    vo_raw = object_rows.T @ z if object_rows.numel() > 0 else torch.empty(0, observer_basis.shape[0])
+    if generic_sig.numel() > 0 and vo_raw.numel() > 0:
+        vo_raw = vo_raw - (vo_raw @ generic_sig.T) @ generic_sig
+    object_sig = _orthonormal_basis([vo_raw], observer_basis.shape[0])[: max(0, min(int(object_signature_rank), observer_basis.shape[0]))]
+    result = tgvq_project_update(
+        update_f,
+        keys=k,
+        observer_basis=observer_basis,
+        generic_row_basis=generic_rows,
+        object_row_basis=object_rows,
+        generic_signature_basis=generic_sig,
+        object_signature_basis=object_sig,
+        positive_weights=w,
+        negative_keys=negative_keys,
+        ridge=ridge,
+        negative_weight=negative_weight,
+        ghost_penalty=ghost_penalty,
+        object_preserve=object_preserve,
+        correction_cap=correction_cap,
+        eps=eps,
+    )
+    result.diagnostics.update(
+        {
+            "tgvq_signal_mean": float(signal.mean().item()),
+            "tgvq_signal_max": float(signal.max().item()),
+            "tgvq_high_rows": float(high_idx.numel()),
+            "tgvq_low_rows": float(low_idx.numel()),
+        }
+    )
+    return result
+
+
 def tag_ce_purify_update(
     update: torch.Tensor,
     *,
@@ -6705,6 +7579,73 @@ def _prediction_history(keys: torch.Tensor, token_idx: int, min_rows: int) -> to
     return keys[mask]
 
 
+def _current_context_token_basis(
+    z_keys: torch.Tensor,
+    *,
+    context_rank: int = 8,
+    position_rank: int = 2,
+) -> torch.Tensor:
+    """Token-mode nuisance basis from the current context only.
+
+    This intentionally avoids null prompts, external activation baselines, old
+    tasks, and temporal-history predictors. The returned columns describe broad
+    structure inside the single current pass: constants, smooth position modes,
+    and current-context token PCs.
+    """
+
+    z = torch.nan_to_num(z_keys.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    if z.ndim != 2 or z.shape[0] == 0:
+        return torch.empty(0, 0, dtype=torch.float32)
+    t = z.shape[0]
+    cols: list[torch.Tensor] = [torch.ones(t, 1, dtype=torch.float32)]
+    if int(position_rank) > 0 and t > 1:
+        pos = torch.linspace(-1.0, 1.0, t, dtype=torch.float32)
+        pos_cols = [pos]
+        if int(position_rank) >= 2:
+            pos_cols.append(pos.square() - pos.square().mean())
+        for power in range(3, int(position_rank) + 1):
+            col = pos.pow(power)
+            pos_cols.append(col - col.mean())
+        cols.append(torch.stack(pos_cols, dim=1))
+    if int(context_rank) > 0 and min(z.shape) > 1:
+        centered = z - z.mean(dim=0, keepdim=True)
+        try:
+            u, _s, _vh = torch.linalg.svd(centered, full_matrices=False)
+            rank = max(0, min(int(context_rank), u.shape[1]))
+            if rank > 0:
+                cols.append(u[:, :rank])
+        except RuntimeError:
+            pass
+    basis = torch.cat(cols, dim=1)
+    q, _r = torch.linalg.qr(basis, mode="reduced")
+    return q.contiguous()
+
+
+def _robust_exp_gate(
+    scores: torch.Tensor,
+    *,
+    temperature: float = 0.75,
+    cap: float = 20.0,
+    floor: float = 0.0,
+    eps: float = 1e-12,
+) -> torch.Tensor:
+    values = torch.nan_to_num(scores.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0).clamp_min(float(eps))
+    if values.numel() == 0:
+        return values
+    log_values = torch.log(values)
+    centered = log_values - log_values.median()
+    scale = centered.abs().median()
+    if float(scale.item()) <= float(eps):
+        scale = log_values.std(unbiased=False).clamp_min(float(eps))
+    z = centered / scale.clamp_min(float(eps))
+    gate = torch.exp((z / max(float(temperature), float(eps))).clamp(max=20.0))
+    if cap > 0:
+        gate = gate.clamp(max=float(cap))
+    if floor > 0:
+        gate = gate.clamp(min=float(floor))
+    return (gate / gate.mean().clamp_min(float(eps))).contiguous()
+
+
 def select_intrinsic_predictive_residual_write(
     keys: torch.Tensor,
     layer: nn.Module,
@@ -6860,6 +7801,8 @@ def select_intrinsic_relational_residual_write(
     key_feature_top_k: int = 8,
     value_feature_top_k: int = 32,
     pair_top_k: int = 16,
+    pair_score_quantile: float = 0.0,
+    row_score_quantile: float = 0.0,
     bidirectional_pairs: bool = False,
     relation_value_mode: str = "residual",
     target_scale: float = 1.0,
@@ -6985,6 +7928,13 @@ def select_intrinsic_relational_residual_write(
 
         if not pair_rows:
             continue
+        if float(pair_score_quantile) > 0.0 and len(pair_rows) > 1:
+            q = min(max(float(pair_score_quantile), 0.0), 1.0)
+            pair_scores = torch.tensor([row[0] for row in pair_rows], dtype=torch.float32)
+            pair_cutoff = torch.quantile(pair_scores, q)
+            pair_rows = [row for row in pair_rows if row[0] >= float(pair_cutoff.item())]
+            if not pair_rows:
+                continue
         pair_rows.sort(key=lambda item: item[0], reverse=True)
         for pair_score_float, cause_idx, value_idx, gain_float in pair_rows[:max_pairs]:
             activation = token_key[cause_idx]
@@ -7024,6 +7974,25 @@ def select_intrinsic_relational_residual_write(
     example_keys = torch.stack(examples, dim=0)
     target_rows = torch.stack(targets, dim=0)
     raw_weights = torch.stack(weights, dim=0)
+    token_rows = torch.stack(example_tokens, dim=0).contiguous()
+    feature_rows = torch.stack(example_features, dim=0).contiguous()
+    score_rows = torch.stack(selected_scores, dim=0).contiguous()
+    feature_score_rows = torch.stack(selected_feature_scores, dim=0).contiguous()
+    target_key_rows = torch.stack(selected_target_keys, dim=0).contiguous()
+    if float(row_score_quantile) > 0.0 and raw_weights.numel() > 1:
+        q = min(max(float(row_score_quantile), 0.0), 1.0)
+        row_cutoff = torch.quantile(raw_weights.float(), q)
+        keep = torch.nonzero(raw_weights >= row_cutoff, as_tuple=False).flatten()
+        if keep.numel() == 0:
+            keep = torch.argmax(raw_weights).reshape(1)
+        example_keys = example_keys[keep]
+        target_rows = target_rows[keep]
+        raw_weights = raw_weights[keep]
+        token_rows = token_rows[keep]
+        feature_rows = feature_rows[keep]
+        score_rows = score_rows[keep]
+        feature_score_rows = feature_score_rows[keep]
+        target_key_rows = target_key_rows[keep]
     normed_weights = shape_surprise_weights(
         raw_weights,
         mode=surprise_weight_mode,
@@ -7034,11 +8003,11 @@ def select_intrinsic_relational_residual_write(
         keys=example_keys.contiguous(),
         targets=target_rows.contiguous(),
         weights=normed_weights.contiguous(),
-        token_indices=torch.stack(example_tokens, dim=0).contiguous(),
-        row_scores=torch.stack(selected_scores, dim=0).contiguous(),
-        feature_scores=torch.stack(selected_feature_scores, dim=0).contiguous(),
-        target_keys=torch.stack(selected_target_keys, dim=0).contiguous(),
-        feature_indices=torch.stack(example_features, dim=0).contiguous(),
+        token_indices=token_rows,
+        row_scores=score_rows,
+        feature_scores=feature_score_rows,
+        target_keys=target_key_rows,
+        feature_indices=feature_rows,
     )
 
 
@@ -7054,8 +8023,11 @@ def select_intrinsic_relational_aggregate_write(
     key_feature_top_k: int = 8,
     value_feature_top_k: int = 32,
     pair_top_k: int = 64,
+    pair_score_quantile: float = 0.0,
+    row_score_quantile: float = 0.0,
     bidirectional_pairs: bool = False,
     relation_value_mode: str = "residual",
+    relation_context_target_mode: str = "full",
     target_scale: float = 1.0,
     prediction_ridge: float = 1.0,
     persistence_power: float = 0.0,
@@ -7117,6 +8089,8 @@ def select_intrinsic_relational_aggregate_write(
     down = down_weight.detach().float().cpu()
     if relation_value_mode not in {"residual", "full", "context"}:
         raise ValueError(f"Unknown relation_value_mode {relation_value_mode!r}")
+    if relation_context_target_mode not in {"full", "surprising_pairs_only"}:
+        raise ValueError(f"Unknown relation_context_target_mode {relation_context_target_mode!r}")
 
     scale = mlp_weight_prior_scale(layer, keys_f.shape[1]).to(keys_f.device).clamp_min(1e-12)
     z_keys = score_keys_f / scale.unsqueeze(0)
@@ -7169,6 +8143,13 @@ def select_intrinsic_relational_aggregate_write(
 
         if not pair_rows:
             continue
+        if float(pair_score_quantile) > 0.0 and len(pair_rows) > 1:
+            q = min(max(float(pair_score_quantile), 0.0), 1.0)
+            pair_scores = torch.tensor([row[0] for row in pair_rows], dtype=torch.float32)
+            pair_cutoff = torch.quantile(pair_scores, q)
+            pair_rows = [row for row in pair_rows if row[0] >= float(pair_cutoff.item())]
+            if not pair_rows:
+                continue
         pair_rows.sort(key=lambda item: item[0], reverse=True)
         grouped: dict[int, list[tuple[float, int, float]]] = {}
         for pair_score_float, cause_idx, value_idx, gain_float in pair_rows[:max_pairs]:
@@ -7183,7 +8164,13 @@ def select_intrinsic_relational_aggregate_write(
             score_values = torch.tensor([row[0] for row in values_for_key], dtype=torch.float32).clamp_min(1e-12)
             target_key = torch.zeros_like(token_key)
             if relation_value_mode == "context":
-                context_features = value_features[value_features != key_idx]
+                if relation_context_target_mode == "surprising_pairs_only":
+                    context_features = torch.tensor(
+                        sorted({target_idx for _score, target_idx, _gain in values_for_key if target_idx != key_idx}),
+                        dtype=torch.long,
+                    )
+                else:
+                    context_features = value_features[value_features != key_idx]
                 target_key[context_features] = token_key[context_features]
             else:
                 norm_weights = torch.sqrt(score_values / score_values.mean().clamp_min(1e-12)).clamp(max=4.0)
@@ -7212,6 +8199,25 @@ def select_intrinsic_relational_aggregate_write(
     example_keys = torch.stack(examples, dim=0)
     target_rows = torch.stack(targets, dim=0)
     raw_weights = torch.stack(weights, dim=0)
+    token_rows = torch.stack(example_tokens, dim=0).contiguous()
+    feature_rows = torch.stack(example_features, dim=0).contiguous()
+    score_rows = torch.stack(selected_scores, dim=0).contiguous()
+    feature_score_rows = torch.stack(selected_feature_scores, dim=0).contiguous()
+    target_key_rows = torch.stack(selected_target_keys, dim=0).contiguous()
+    if float(row_score_quantile) > 0.0 and raw_weights.numel() > 1:
+        q = min(max(float(row_score_quantile), 0.0), 1.0)
+        row_cutoff = torch.quantile(raw_weights.float(), q)
+        keep = torch.nonzero(raw_weights >= row_cutoff, as_tuple=False).flatten()
+        if keep.numel() == 0:
+            keep = torch.argmax(raw_weights).reshape(1)
+        example_keys = example_keys[keep]
+        target_rows = target_rows[keep]
+        raw_weights = raw_weights[keep]
+        token_rows = token_rows[keep]
+        feature_rows = feature_rows[keep]
+        score_rows = score_rows[keep]
+        feature_score_rows = feature_score_rows[keep]
+        target_key_rows = target_key_rows[keep]
     normed_weights = shape_surprise_weights(
         raw_weights,
         mode=surprise_weight_mode,
@@ -7222,11 +8228,289 @@ def select_intrinsic_relational_aggregate_write(
         keys=example_keys.contiguous(),
         targets=target_rows.contiguous(),
         weights=normed_weights.contiguous(),
-        token_indices=torch.stack(example_tokens, dim=0).contiguous(),
-        row_scores=torch.stack(selected_scores, dim=0).contiguous(),
-        feature_scores=torch.stack(selected_feature_scores, dim=0).contiguous(),
-        target_keys=torch.stack(selected_target_keys, dim=0).contiguous(),
-        feature_indices=torch.stack(example_features, dim=0).contiguous(),
+        token_indices=token_rows,
+        row_scores=score_rows,
+        feature_scores=feature_score_rows,
+        target_keys=target_key_rows,
+        feature_indices=feature_rows,
+    )
+
+
+def select_intrinsic_global_coherence_relational_write(
+    keys: torch.Tensor,
+    layer: nn.Module,
+    down_weight: torch.Tensor,
+    *,
+    scoring_keys: torch.Tensor | None = None,
+    token_mode: str = "last",
+    top_tokens: int = 16,
+    feature_top_k: int = 32,
+    key_feature_top_k: int = 8,
+    value_feature_top_k: int = 32,
+    pair_top_k: int = 64,
+    pair_score_quantile: float = 0.0,
+    row_score_quantile: float = 0.0,
+    bidirectional_pairs: bool = False,
+    relation_value_mode: str = "residual",
+    relation_context_target_mode: str = "full",
+    target_scale: float = 1.0,
+    context_rank: int = 8,
+    position_rank: int = 2,
+    coherence_ridge: float = 1e-3,
+    support_power: float = 0.0,
+    min_support_gain: float = 0.0,
+    persistence_power: float = 0.0,
+    persistence_threshold_fraction: float = 0.25,
+    persistence_min_tokens: int = 2,
+    feature_weights: torch.Tensor | None = None,
+    target_projection_basis: torch.Tensor | None = None,
+    surprise_weight_mode: str = "linear",
+    surprise_weight_temperature: float = 1.0,
+    surprise_weight_cap: float = 100.0,
+) -> IntrinsicSurpriseSelection:
+    """Select relations whose coactivation is unexplained by the current context.
+
+    Unlike ``select_intrinsic_relational_aggregate_write``, this does not use
+    prior token positions as a temporal predictor. Each candidate pair is scored
+    by the residual of its whole-context coactivation pattern after removing
+    same-context nuisance modes: feature marginals, position/constant modes, and
+    low-rank token modes of the current pass.
+    """
+
+    keys_f = keys.detach().float().cpu()
+    if keys_f.ndim != 2 or keys_f.shape[0] == 0:
+        raise ValueError(f"keys must be non-empty [tokens, features], got {tuple(keys_f.shape)}")
+    score_keys_f = keys_f
+    if scoring_keys is not None:
+        score_keys_f = scoring_keys.detach().float().cpu()
+        if score_keys_f.shape != keys_f.shape:
+            raise ValueError(
+                f"scoring_keys must match keys shape {tuple(keys_f.shape)}, got {tuple(score_keys_f.shape)}"
+            )
+    feature_scores = intrinsic_feature_scores(score_keys_f, layer)
+    if persistence_power > 0.0:
+        persistence = lesson_persistence_weights(
+            feature_scores,
+            threshold_fraction=persistence_threshold_fraction,
+            min_tokens=persistence_min_tokens,
+        )
+        feature_scores = feature_scores * persistence.clamp_min(0.0).pow(float(persistence_power)).unsqueeze(0)
+    if feature_weights is not None:
+        feature_scores = feature_scores * feature_weights.detach().float().cpu().clamp_min(0.0).unsqueeze(0)
+    score_k = max(1, min(int(feature_top_k), feature_scores.shape[1]))
+    row_scores = torch.topk(feature_scores, k=score_k, dim=1).values.mean(dim=1)
+    token_indices = _select_tokens_from_feature_scores(
+        feature_scores,
+        row_scores,
+        token_mode=token_mode,
+        top_tokens=top_tokens,
+        feature_top_k=score_k,
+    )
+
+    down = down_weight.detach().float().cpu()
+    if relation_value_mode not in {"residual", "full", "context"}:
+        raise ValueError(f"Unknown relation_value_mode {relation_value_mode!r}")
+    if relation_context_target_mode not in {"full", "surprising_pairs_only"}:
+        raise ValueError(f"Unknown relation_context_target_mode {relation_context_target_mode!r}")
+
+    scale = mlp_weight_prior_scale(layer, keys_f.shape[1]).to(keys_f.device).clamp_min(1e-12)
+    z_keys = score_keys_f / scale.unsqueeze(0)
+    token_basis = _current_context_token_basis(
+        z_keys,
+        context_rank=context_rank,
+        position_rank=position_rank,
+    )
+    candidate_k = max(2, min(int(feature_top_k), keys_f.shape[1]))
+    cause_k = max(1, min(int(key_feature_top_k), candidate_k - 1))
+    value_k = max(1, min(int(value_feature_top_k), candidate_k - 1))
+    max_pairs = max(1, int(pair_top_k))
+    ridge = max(float(coherence_ridge), 0.0)
+
+    examples: list[torch.Tensor] = []
+    targets: list[torch.Tensor] = []
+    weights: list[torch.Tensor] = []
+    example_tokens: list[torch.Tensor] = []
+    example_features: list[torch.Tensor] = []
+    selected_scores: list[torch.Tensor] = []
+    selected_feature_scores: list[torch.Tensor] = []
+    selected_target_keys: list[torch.Tensor] = []
+    raw_pair_count = 0
+    kept_pair_count = 0
+    local_ratio_values: list[float] = []
+    support_gain_values: list[float] = []
+    support_pass_count = 0
+    object_token_mask = torch.zeros(z_keys.shape[0], dtype=torch.bool)
+    object_token_mask[token_indices.clamp(min=0, max=z_keys.shape[0] - 1)] = True
+    object_token_count = int(object_token_mask.sum().item())
+    object_token_fraction = max(float(object_token_count) / max(float(z_keys.shape[0]), 1.0), 1e-6)
+
+    for token_idx in token_indices.tolist():
+        token_key = keys_f[token_idx]
+        token_scores = feature_scores[token_idx]
+        candidates = torch.topk(token_scores, k=candidate_k, dim=0).indices
+        cause_features = candidates[:cause_k]
+        value_features = candidates[: max(cause_k + 1, min(candidate_k, value_k + cause_k))]
+
+        pair_rows: list[tuple[float, int, int, float]] = []
+        for cause_idx in cause_features.tolist():
+            for value_idx in value_features.tolist():
+                if value_idx == cause_idx:
+                    continue
+                pattern = z_keys[:, cause_idx] * z_keys[:, value_idx]
+                current_product = pattern[token_idx]
+                if float(current_product.abs().item()) <= 1e-12:
+                    continue
+                nuisance = torch.cat(
+                    [
+                        token_basis,
+                        z_keys[:, cause_idx : cause_idx + 1],
+                        z_keys[:, value_idx : value_idx + 1],
+                    ],
+                    dim=1,
+                )
+                system = nuisance.T @ nuisance + ridge * torch.eye(nuisance.shape[1], dtype=nuisance.dtype)
+                coeff = _solve_symmetric_psd(system, (nuisance.T @ pattern).unsqueeze(1)).squeeze(1)
+                residual = pattern - nuisance @ coeff
+                residual_energy = residual.square().mean().clamp_min(1e-6)
+                residual_energy_sum = residual.square().sum().clamp_min(1e-6)
+                if object_token_count > 0:
+                    object_energy = residual[object_token_mask].square().sum()
+                    support_fraction = object_energy / residual_energy_sum
+                    support_gain = support_fraction / object_token_fraction
+                else:
+                    support_gain = torch.tensor(1.0, dtype=torch.float32)
+                support_gain_values.append(float(support_gain.item()))
+                if float(min_support_gain) > 0.0 and float(support_gain.item()) < float(min_support_gain):
+                    continue
+                support_pass_count += 1
+                local_residual = residual[token_idx]
+                if float(local_residual.abs().item()) <= 1e-12:
+                    continue
+                feature_pair_score = torch.sqrt(
+                    token_scores[cause_idx].clamp_min(1e-12)
+                    * token_scores[value_idx].clamp_min(1e-12)
+                )
+                local_ratio = (local_residual.square() / residual_energy).clamp_min(0.0)
+                if float(support_power) > 0.0:
+                    local_ratio = local_ratio * support_gain.clamp_min(1e-6).pow(float(support_power))
+                pair_score = local_ratio * feature_pair_score
+                if not torch.isfinite(pair_score):
+                    continue
+                gain = (local_residual.abs() / current_product.abs().clamp_min(1e-6)).clamp(max=2.0)
+                raw_pair_count += 1
+                local_ratio_values.append(float(local_ratio.item()))
+                pair_rows.append((float(pair_score.item()), cause_idx, value_idx, float(gain.item())))
+
+        if not pair_rows:
+            continue
+        if float(pair_score_quantile) > 0.0 and len(pair_rows) > 1:
+            q = min(max(float(pair_score_quantile), 0.0), 1.0)
+            pair_scores = torch.tensor([row[0] for row in pair_rows], dtype=torch.float32)
+            pair_cutoff = torch.quantile(pair_scores, q)
+            pair_rows = [row for row in pair_rows if row[0] >= float(pair_cutoff.item())]
+            if not pair_rows:
+                continue
+        pair_rows.sort(key=lambda item: item[0], reverse=True)
+        grouped: dict[int, list[tuple[float, int, float]]] = {}
+        for pair_score_float, cause_idx, value_idx, gain_float in pair_rows[:max_pairs]:
+            kept_pair_count += 1
+            grouped.setdefault(cause_idx, []).append((pair_score_float, value_idx, gain_float))
+            if bidirectional_pairs:
+                grouped.setdefault(value_idx, []).append((pair_score_float, cause_idx, gain_float))
+
+        for key_idx, values_for_key in grouped.items():
+            key_activation = token_key[key_idx]
+            if float(key_activation.abs().item()) <= 1e-12:
+                continue
+            score_values = torch.tensor([row[0] for row in values_for_key], dtype=torch.float32).clamp_min(1e-12)
+            target_key = torch.zeros_like(token_key)
+            if relation_value_mode == "context":
+                if relation_context_target_mode == "surprising_pairs_only":
+                    context_features = torch.tensor(
+                        sorted({target_idx for _score, target_idx, _gain in values_for_key if target_idx != key_idx}),
+                        dtype=torch.long,
+                    )
+                else:
+                    context_features = value_features[value_features != key_idx]
+                target_key[context_features] = token_key[context_features]
+            else:
+                norm_weights = torch.sqrt(score_values / score_values.mean().clamp_min(1e-12)).clamp(max=4.0)
+                for norm_weight, (_pair_score, target_idx, gain_float) in zip(norm_weights, values_for_key, strict=False):
+                    value_gain = gain_float if relation_value_mode == "residual" else 1.0
+                    target_activation = token_key[target_idx] * value_gain * float(norm_weight.item())
+                    target_key[target_idx] += target_activation
+            if float(torch.linalg.vector_norm(target_key).item()) <= 1e-12:
+                continue
+            sparse_key = torch.zeros_like(token_key)
+            sparse_key[key_idx] = key_activation
+            target = float(target_scale) * (target_key @ down.T)
+            if target_projection_basis is not None and target_projection_basis.numel() > 0:
+                target = project_rows_away_from_basis(target.unsqueeze(0), target_projection_basis).squeeze(0)
+            examples.append(sparse_key)
+            targets.append(target)
+            weights.append(score_values.mean().clamp_min(1e-12))
+            example_tokens.append(torch.tensor(token_idx, dtype=torch.long))
+            example_features.append(torch.tensor(key_idx, dtype=torch.long))
+            selected_scores.append(score_values.mean().clamp_min(1e-12))
+            selected_feature_scores.append(token_scores)
+            selected_target_keys.append(target_key)
+
+    if not examples:
+        raise ValueError("No nonzero global coherence relational examples were selected")
+    example_keys = torch.stack(examples, dim=0)
+    target_rows = torch.stack(targets, dim=0)
+    raw_weights = torch.stack(weights, dim=0)
+    token_rows = torch.stack(example_tokens, dim=0).contiguous()
+    feature_rows = torch.stack(example_features, dim=0).contiguous()
+    score_rows = torch.stack(selected_scores, dim=0).contiguous()
+    feature_score_rows = torch.stack(selected_feature_scores, dim=0).contiguous()
+    target_key_rows = torch.stack(selected_target_keys, dim=0).contiguous()
+    if float(row_score_quantile) > 0.0 and raw_weights.numel() > 1:
+        q = min(max(float(row_score_quantile), 0.0), 1.0)
+        row_cutoff = torch.quantile(raw_weights.float(), q)
+        keep = torch.nonzero(raw_weights >= row_cutoff, as_tuple=False).flatten()
+        if keep.numel() == 0:
+            keep = torch.argmax(raw_weights).reshape(1)
+        example_keys = example_keys[keep]
+        target_rows = target_rows[keep]
+        raw_weights = raw_weights[keep]
+        token_rows = token_rows[keep]
+        feature_rows = feature_rows[keep]
+        score_rows = score_rows[keep]
+        feature_score_rows = feature_score_rows[keep]
+        target_key_rows = target_key_rows[keep]
+    normed_weights = shape_surprise_weights(
+        raw_weights,
+        mode=surprise_weight_mode,
+        temperature=surprise_weight_temperature,
+        max_weight=surprise_weight_cap,
+    )
+    ratios = torch.tensor(local_ratio_values, dtype=torch.float32) if local_ratio_values else torch.empty(0)
+    support_gains = torch.tensor(support_gain_values, dtype=torch.float32) if support_gain_values else torch.empty(0)
+    return IntrinsicSurpriseSelection(
+        keys=example_keys.contiguous(),
+        targets=target_rows.contiguous(),
+        weights=normed_weights.contiguous(),
+        token_indices=token_rows,
+        row_scores=score_rows,
+        feature_scores=feature_score_rows,
+        target_keys=target_key_rows,
+        feature_indices=feature_rows,
+        diagnostics={
+            "global_coherence_context_rank": float(context_rank),
+            "global_coherence_position_rank": float(position_rank),
+            "global_coherence_raw_pairs": float(raw_pair_count),
+            "global_coherence_support_pass_pairs": float(support_pass_count),
+            "global_coherence_kept_pairs": float(kept_pair_count),
+            "global_coherence_local_ratio_mean": float(ratios.mean().item()) if ratios.numel() else 0.0,
+            "global_coherence_local_ratio_max": float(ratios.max().item()) if ratios.numel() else 0.0,
+            "global_coherence_support_gain_mean": (
+                float(support_gains.mean().item()) if support_gains.numel() else 0.0
+            ),
+            "global_coherence_support_gain_max": (
+                float(support_gains.max().item()) if support_gains.numel() else 0.0
+            ),
+        },
     )
 
 

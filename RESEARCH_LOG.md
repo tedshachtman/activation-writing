@@ -8647,3 +8647,430 @@ Interpretation:
 - This falsifies the cheap target/effect-facet approximation of COVER-DICE. The
   next version needs real visible-span/role facets or item-conditioned margin
   diagnostics, not just target-SVD facet grouping.
+
+## 2026-05-24: GSCI Exact Schur-In-Design
+
+Implemented `--intrinsic-target-purifier gsci` with:
+
+```text
+--gsci-schur-mode residualize|design
+--gsci-ghost-ridge
+--gsci-graph-top-k
+--gsci-smooth-gamma
+--gsci-gate-temperature
+--gsci-gate-cap
+--gsci-row-nuisance-rank
+--gsci-value-nuisance-rank
+```
+
+The original `residualize` mode subtracts an approximate row-pattern x
+value/readout ghost from the target. The new `design` mode fits the ghost inside
+the closed-form solve and discards it, so the nuisance field competes with the
+written map rather than being pre-subtracted.
+
+Strict Lyran 7-layer fixture:
+
+| Method | Edited | expanded c2w | before-correct drop | max drop | Notes |
+| --- | ---: | ---: | ---: | ---: | --- |
+| raw relational 7-layer | `7/20` | `0` | `2.142` | `9.808` | broad acquisition, unsafe margin damage |
+| GSCI approximate Schur, default | `2/20` | `3` | `2.428` | `8.939` | worse than DICE shard |
+| GSCI approximate Schur, wide bases | `4/20` | `2` | `1.620` | `5.402` | recovers broader items, unsafe |
+| GSCI approximate Schur x2 | `3/20` | `1` | `1.608` | `5.297` | safer, less acquisition |
+| GSCI approximate Schur x3 | `4/20` | `1` | `1.448` | `5.224` | best approximate point, still unsafe |
+| GSCI exact Schur-in-design, ghost ridge `1e-5` | `3/20` | `1` | `1.732` | `5.914` | did not improve frontier |
+
+Design-solve diagnostics:
+
+- value nuisance rank was `128` in all layers;
+- mean coefficient-subspace target Frobenius was `153.8`;
+- mean residual-subspace target Frobenius was `652.1`;
+- mean coefficient-subspace update Frobenius was only `0.102`;
+- mean residual-subspace update Frobenius was `4.034`.
+
+Interpretation:
+
+- The exact Schur design is working mechanically: the fitted ghost can explain
+  and discard graph-generic/value-generic components in synthetic tests.
+- On the real strict fixture, the dangerous/acquisition-bearing mass mostly
+  remains in the residual value subspace, not in the current nuisance value
+  subspace. The design ghost therefore removes too little of the causal
+  sentinel-damaging component.
+- GSCI is not yet a pass. It gives a weak safety/acquisition tradeoff and
+  recovers some non-shard items, but it does not reach `0` c2w.
+- Next direction: keep the relational/context-value carrier, but change the
+  capture gate to precision-weighted contextual tag-and-capture. Prediction
+  error should allocate plasticity to rich tags; it should not itself become the
+  written value target.
+
+## 2026-05-24: Contextual Tag-and-Capture GSCI
+
+Implemented a tag-and-capture gate:
+
+```text
+--gsci-capture-mode tag_capture
+```
+
+This keeps the relational/context-value target as the rich synaptic tag, but
+changes the capture strength. The gate now combines:
+
+- Schur-residualized graph coherence error;
+- within-context precision from effective neighbor count over neighbor
+  disagreement;
+- a current-weight allocation prior from active down-value column energy;
+- latent object-versus-posture competition using the current row/value nuisance
+  bases.
+
+No default activation baselines, sentinels, probes, labels, old traces, or
+sidecar state are used. The temporary graph/gate is discarded after the write.
+
+Strict Lyran 7-layer fixture:
+
+| Method | Edited | expanded c2w | before-correct drop | max drop | Correct items |
+| --- | ---: | ---: | ---: | ---: | --- |
+| raw relational 7-layer | `7/20` | `0` | `2.142` | `9.808` | broad, unsafe margin damage |
+| GSCI exact Schur-in-design | `3/20` | `1` | `1.732` | `5.914` | weak, unsafe |
+| tag-capture GSCI, temp `2`, cap `4` | `2/20` | `0` | `1.983` | `6.682` | idx `1`, `5`: two `likes` items |
+| tag-capture GSCI, temp `1`, cap `8` | `1/20` | `1` | `2.181` | `7.683` | idx `5` only |
+
+Diagnostics for the safer tag-capture run:
+
+- mean max gate `3.18`;
+- mean min gate `0.088`;
+- mean capture precision `1.13`;
+- mean latent gate `0.963`;
+- mean update Frobenius `4.77`;
+- almost all update mass still came from the residual value subspace rather than
+  the nuisance/value coefficient subspace.
+
+Interpretation:
+
+- The biological/tag-and-capture framing is implemented mechanically and is
+  legal under the constraints.
+- It does change the item profile: the safe run kept two non-shard `likes`
+  items rather than only the old `teacher saw cat` island.
+- It still does not recover enough of the raw `7/20` carrier, and aggressive
+  gating gets worse while reintroducing c2w.
+- The current latent posture/object competition is too weakly discriminative:
+  latent gates are near `0.96` on average, so the posture cause is not really
+  competing. The method is mostly a precision/allocation reweighting of the
+  unsafe residual carrier.
+- Next likely improvement: make latent-cause competition sharper by constructing
+  an explicit object row basis from high-capture graph neighborhoods and a
+  posture row basis from low-capture/low-innovation modes, rather than using the
+  same generic row/value nuisance basis for both capture and ghost fitting.
+
+## 2026-05-24: Separate Object/Posture Latent-Cause GSCI
+
+Implemented:
+
+```text
+--gsci-latent-basis-mode shared|separate
+--gsci-object-row-rank
+--gsci-object-value-rank
+--gsci-object-quantile
+--gsci-latent-temperature
+```
+
+In `separate` mode, the posture explanation remains the generic row/value
+nuisance basis used by the Schur ghost, while the object explanation is built
+from high-innovation graph neighborhoods and their high-innovation value
+directions. The latent gate is now based on which explanation leaves lower
+residual error for the same supported coherence residual.
+
+Strict Lyran 7-layer fixture:
+
+| Method | Edited | expanded c2w | before-correct drop | max drop | Correct items |
+| --- | ---: | ---: | ---: | ---: | --- |
+| tag-capture shared latent | `2/20` | `0` | `1.983` | `6.682` | idx `1`, `5` |
+| tag-capture separate latent, scale `.10` | `3/20` | `0` | `2.034` | `7.641` | idx `1`, `5`, `17` |
+| tag-capture separate latent, scale `.075` | `3/20` | `1` | `1.638` | `4.792` | idx `1`, `5`, `17` |
+
+Diagnostics:
+
+- Shared latent gate mean was about `0.963`, so it was barely competing.
+- Separate latent gate mean is about `0.51`, with mean min/max around
+  `0.31/0.86`; this confirms the latent-cause competition is now active.
+- Object latent row/value ranks were `16/32` as configured.
+- Update Frobenius drops from `4.76` at scale `.10` to `3.78` at `.075`, but
+  the `.075` run unexpectedly reintroduced one c2w.
+
+Interpretation:
+
+- Separate latent causes improved the safe item profile from `2/20` to `3/20`
+  while keeping c2w clean at scale `.10`.
+- The newly recovered item is `small cat saw small child`, so the method is no
+  longer only preserving `likes` or the earlier `teacher saw cat` shard.
+- Margin damage remains high, and lower scale did not monotonically improve
+  discrete sentinel safety.
+- This is the best biologically inspired tag-and-capture diagnostic so far, but
+  still not a pass. The next improvement should target the value side of the
+  object/posture competition: the current Schur design still places almost all
+  update mass in the residual value subspace, so the sentinel-causal component
+  is not being exposed as generic posture-value mass.
+
+## 2026-05-24: GSCI Value-Side Diagnostics
+
+Tested whether the value-side problem was simple under-ranking.
+
+Strict Lyran 7-layer fixture:
+
+| Method | Edited | expanded c2w | before-correct drop | max drop | Notes |
+| --- | ---: | ---: | ---: | ---: | --- |
+| separate latent, value rank `128` | `3/20` | `0` | `2.034` | `7.641` | best separate-latent point |
+| separate latent, value rank `256`, output rank `512` | `1/20` | `0` | `1.719` | `5.799` | safer margin, acquisition collapse |
+
+Diagnostics:
+
+- value rank `128`: mean coefficient target Fro `148.2`, residual target Fro
+  `620.9`, residual update Fro `4.75`;
+- value rank `256`: mean coefficient target Fro `152.9`, residual target Fro
+  `617.9`, residual update Fro `4.47`.
+
+Interpretation:
+
+- Increasing the value nuisance rank does not expose the acquisition/damage mass
+  as Schur-removable posture. It mostly acts like a stronger blunt protection
+  stack and drops acquisition.
+
+Also tested an object-value bandpass target:
+
+```text
+--gsci-value-target-mode object_bandpass
+--gsci-value-residual-floor 0.35 / 0.75
+```
+
+| Method | Edited | expanded c2w | before-correct drop | max drop | Correct items |
+| --- | ---: | ---: | ---: | ---: | --- |
+| object bandpass, residual floor `.35` | `0/20` | `0` | `1.896` | `6.498` | none |
+| object bandpass, residual floor `.75` | `2/20` | `0` | `1.845` | `6.784` | idx `1`, `5` |
+
+Interpretation:
+
+- The current object-value basis does not contain enough of the threshold
+  payload. Suppressing residual value directions makes the write safe-ish but
+  inert or narrow.
+- The key payload appears to require broad residual value directions; safety
+  probably needs a better protection metric around the full value carrier, not
+  direct value bandpass deletion.
+
+Also tested keeping the full carrier but strengthening the output protection:
+
+| Method | Edited | expanded c2w | before-correct drop | max drop | Correct items |
+| --- | ---: | ---: | ---: | ---: | --- |
+| separate latent, output `256/10` | `3/20` | `0` | `2.034` | `7.641` | idx `1`, `5`, `17` |
+| separate latent, output `512/20` | `1/20` | `0` | `1.826` | `6.594` | idx `1` |
+
+Interpretation:
+
+- Stronger output protection reduces margin damage slightly but collapses
+  acquisition, matching the old “safe by blunt readout damping” failure.
+- Current best GSCI point remains separate latent, full carrier, output
+  `256/10`: `3/20`, `0` c2w, but high margin damage.
+- The next useful object probably needs a downstream/behavioral value
+  coordinate, not more local value-rank expansion, direct value bandpass, or
+  stronger output penalties.
+
+## 2026-05-25: TGVQ Transported Graph-Value Quotient
+
+Implemented `--intrinsic-target-purifier tgvq`.
+
+TGVQ keeps the raw relational/context-value solve as the carrier, then applies a
+closed-form rank-one constrained projection in update-map space. It builds
+current-pass graph row modes and hidden/value observer sketches, forms generic
+row-pattern times transported-value-signature ghost functionals, and preserves
+object row/signature functionals while penalizing the generic transported ghost.
+
+Important implementation note: this first repo version uses cheap same-pass and
+future-hidden observer sketches, not exact autograd VJP rows. It is therefore a
+transport-sketch version of TGVQ, not the full exact downstream tangent variant.
+
+Validation:
+
+```text
+python -m py_compile caic/intrinsic_surprise.py scripts/minilang_write.py scripts/minilang_intrinsic_continual.py
+python -m pytest tests/test_intrinsic_surprise.py -q  # 55 passed
+python -m pytest tests/test_minilang.py -q            # 15 passed
+git diff --check
+```
+
+Strict Lyran 7-layer fixture:
+
+| Method | Scale | Edited | expanded c2w | before-correct drop | max drop | severe drops | Correct items |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| raw relational/context-value | `.10` | `7/20` | `0` | `2.142` | `9.808` | `7` | idx `1,2,4,5,7,14,17` |
+| raw relational/context-value | `.075` | `7/20` | `0` | `1.664` | `6.950` | `7` | idx `1,2,4,5,7,14,17` |
+| TGVQ, ghost `1`, cap `.35` | `.10` | `4/20` | `2` | `2.323` | `6.831` | `12` | idx `1,2,4,17` |
+| TGVQ, ghost `4`, cap `.50` | `.10` | `3/20` | `2` | `2.299` | `5.503` | `11` | idx `1,4,17` |
+| TGVQ, ghost `1`, cap `.35` | `.075` | `3/20` | `0` | `1.610` | `5.050` | `9` | idx `1,4,17` |
+
+TGVQ diagnostics:
+
+- Default `.10` TGVQ hit the correction cap on almost all layer/lesson writes:
+  mean correction ratio `0.347`.
+- Mean transported ghost ratio after projection was still `0.722`, so the
+  projection did not remove most of its own ghost coordinate.
+- Stronger ghost/cap reduced mean ghost ratio to `0.606`, but did not remove the
+  same two sentinel c2w flips; acquisition fell to `3/20`.
+- At scale `.075`, TGVQ became c2w-clean but retained only `3/20`.
+
+Interpretation:
+
+- TGVQ recovered broader-than-DICE items at `.10`, including `likes` and
+  non-teacher role cases, but it was unsafe.
+- Stronger ghost removal did not target the causal sentinel-damaging component.
+  It mainly removed acquisition and left the same c2w flips.
+- The matched raw `.075` control is decisive: raw relational keeps the full
+  `7/20` item set and has `0` c2w at lower scale, although margin damage remains
+  high. Therefore this TGVQ transport-sketch is not improving the Pareto
+  frontier. It is mostly deleting useful raw carrier mass.
+- The best current single-task carrier on this strict fixture is now raw
+  relational/context-value at `.075`: `7/20`, `0` c2w, but with high sentinel
+  margin damage (`1.664` before-correct drop, max `6.950`). This is not a safe
+  final method, but it changes the live problem: the raw payload is real and can
+  be c2w-clean at lower scale; the next question is margin robustness and
+  sequential retention, not merely recovering acquisition from DICE shards.
+
+Next checks:
+
+1. Run raw relational `.075` in the strict two-task no-sidecar fixture. This is
+   now the most important baseline: if it retains task0 and acquires task1 with
+   `0` c2w, many recent purifier paths were unnecessary. If it forgets or causes
+   after-task2 sentinel damage, the real blocker is sequential consolidation
+   under high-margin-risk raw writes.
+2. Run scale sweep `.05/.075/.10` on the same strict fixture and track item
+   margins, not only discrete accuracy/c2w. The item set is stable from `.075`
+   to `.10`, but sentinel margin damage changes, so the useful carrier may have
+   a narrow amplitude basin.
+3. If exact downstream transport is revisited, require it to beat raw `.075`
+   directly. The transport coordinate must preserve the seven raw items while
+   lowering sentinel margin damage; anything below `7/20` is not progress unless
+   it materially improves two-task retention.
+
+## 2026-05-25: Strict Two-Task Raw `.075` Baseline
+
+Ran the strict frozen two-task fixture:
+
+```text
+runs/strict_fixture_lyran_vomar_seed1_candidates80_eval20/eval_questions.jsonl
+```
+
+Settings:
+
+- tasks: Lyran then Vomar;
+- baseline/context: both tasks `0/20` baseline, `20/20` full context;
+- 7 layers: `4,8,12,16,20,24,27`;
+- relational_aggregate, context-value, final-aligned;
+- target scale `.075`;
+- output/input protection `256/10`, `256/20`;
+- no old keys, no DICE, no purifier, no sidecar state.
+
+Results:
+
+| Stage | Lyran | Vomar | expanded c2w | before-correct drop | max drop | severe drops |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| after task0 | `7/20` | - | `0` | `1.664` | `6.950` | `7` |
+| after task1 | `5/20` | `3/20` | `3` | `3.720` | `15.950` | `10` |
+
+Item-level:
+
+- Lyran after task0: idx `1,2,4,5,7,14,17`;
+- Lyran after task1: idx `1,2,5,7,17`;
+- Vomar after task1: idx `6,8,10`;
+- sentinel c2w after task1: grammar idx `2`, grammar idx `11`, semantics
+  idx `18`.
+
+Interpretation:
+
+- Raw `.075` is a genuine acquisition baseline, not a single-task false
+  positive: it preserves most of task0 after a second write and acquires
+  nonzero task1 from a `0/20` baseline.
+- It is not safe under the project constraints. The second raw write pushes the
+  sentinel suite over the discrete flip boundary with `3` c2w and very large
+  max margin damage.
+- This cleanly separates two failure modes:
+  - DICE/key-edge is safe and retains its tiny task0 shard, but task1 stays
+    `0/20`.
+  - Raw `.075` learns both tasks, but damages sentinels after task1.
+- The next viable method should treat raw `.075` as the acquisition carrier and
+  target **sequential margin safety**. A method that gets less than `7/20`
+  single-task or less than `3/20` task1 acquisition is not improving the live
+  frontier unless it eliminates the after-task1 sentinel damage.
+
+## 2026-05-25: Vomar Damage Localization
+
+Added a diagnostic runner flag:
+
+```text
+--task-write-layers "task0_layers;task1_layers"
+```
+
+This lets task0 use the full write layer set while task1 writes only a chosen
+subset, with no old keys or sidecar state. Implementation detail: the write loop
+now iterates `args.layers` rather than all installed wrappers, so per-task
+capture masks work correctly.
+
+Strict two-task raw `.075` layer splits:
+
+| Task1 write layers | Lyran after task1 | Vomar after task1 | c2w after task1 | drop | max drop | severe drops |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `4,8,12,16,20,24,27` | `5/20` | `3/20` | `3` | `3.720` | `15.950` | `10` |
+| `4,8,12` | `4/20` | `3/20` | `3` | `2.124` | `5.447` | `12` |
+| `16,20` | `5/20` | `0/20` | `2` | `1.918` | `7.988` | `8` |
+| `24,27` | `6/20` | `2/20` | `1` | `2.229` | `10.100` | `9` |
+| `4,8,12,24,27` | `5/20` | `1/20` | `1` | `2.479` | `7.863` | `9` |
+
+Item-level:
+
+- Full task1 write keeps Lyran idx `1,2,5,7,17` and loses idx `4,14`.
+- Early-only task1 keeps idx `1,2,5,17`; it loses idx `4,7,14`.
+- Mid-only task1 keeps idx `1,4,5,7,17`; it loses idx `2,14` but acquires no
+  Vomar items.
+- Late-only task1 keeps idx `1,2,4,7,14,17`; it loses only idx `5` and acquires
+  Vomar idx `6,8`.
+- Early+late keeps the same Lyran set as full but acquires only Vomar idx `8`.
+
+Interpretation:
+
+- Mid layers `16,20` are poor risk/reward for task1: they cause sentinel damage
+  and task0 forgetting but no Vomar acquisition.
+- Late layers `24,27` are the best retention/safety subset so far, retaining
+  `6/20` Lyran and acquiring `2/20` Vomar with only one c2w. However, max margin
+  drop remains high.
+- Early layers `4,8,12` alone reproduce the full task1 Vomar acquisition
+  (`3/20`) and the full c2w count (`3`), but with smaller max margin collapse.
+- Early+late is not additive: adding late layers to early layers reduces Vomar
+  acquisition from `3/20` to `1/20` while keeping c2w at `1`. Layer interactions
+  are real; acquisition and damage are not a simple sum of independent layer
+  effects.
+
+Score decomposition:
+
+- Sentinel c2w after the full Vomar write is mostly **additive false evidence**,
+  not correct-answer erasure. For c2w sentinels, the correct option logit often
+  rises, but a wrong option rises more:
+  - grammar idx `2`: answer `Run`, prediction after task1 `Marble`;
+  - grammar idx `11`: answer `Table`, prediction `Blue`;
+  - semantics idx `18`: answer `Late`, prediction `Bright`.
+- Lyran forgetting has a different shape. For lost Lyran items idx `4` and
+  `14`, both the correct and wrong translation option scores fall after Vomar,
+  but the wrong swapped-role option falls less, crossing the already-small
+  margin:
+  - idx `4`: `small dog saw big teacher` becomes `big teacher saw small dog`;
+  - idx `14`: `small teacher saw small cat` becomes `small cat saw small teacher`.
+
+Current diagnosis:
+
+- Sentinel damage looks like generic wrong-option injection / broad option
+  uplift.
+- Lyran forgetting looks like fragile role-binding margin collapse, especially
+  subject/object inversion for `saw`.
+- These are related consequences of the raw Vomar write, but not identical
+  mechanisms. The next method should not only reduce global output drift; it
+  should preserve directed role-binding margins.
+
+Next proposed method direction:
+
+- Higher-order relation indexing is now well-motivated. Pair relations are
+  probably too weak to encode directed subject/verb/object motifs robustly.
+  The first version should use typed/factored hyperedge indexing over
+  runtime-addressable features, not brute-force triples.

@@ -46,6 +46,35 @@ def progress(message: str) -> None:
     print(f"[intrinsic-continual] {message}", flush=True)
 
 
+def parse_layer_list(text: str) -> list[int]:
+    return [int(part.strip()) for part in text.replace(",", " ").split() if part.strip()]
+
+
+def parse_task_write_layers(spec: str, default_layers: list[int], task_count: int) -> list[list[int]]:
+    """Parse optional per-task write-layer specs.
+
+    Format is semicolon-separated, one layer list per task position:
+
+        "4,8,12,16,20,24,27;24,27"
+
+    Empty entries inherit the default layer list.
+    """
+
+    if not spec.strip():
+        return [list(default_layers) for _ in range(task_count)]
+    pieces = spec.split(";")
+    if len(pieces) > task_count:
+        raise ValueError(f"--task-write-layers has {len(pieces)} entries for {task_count} tasks")
+    parsed: list[list[int]] = []
+    for idx in range(task_count):
+        piece = pieces[idx].strip() if idx < len(pieces) else ""
+        layers = parse_layer_list(piece) if piece else list(default_layers)
+        if not layers:
+            raise ValueError(f"Task {idx} write layer spec is empty")
+        parsed.append(layers)
+    return parsed
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", default="Qwen/Qwen3-1.7B")
@@ -101,6 +130,14 @@ def parse_args() -> argparse.Namespace:
         help="Stop after task 0 if edited task-0 correct count is below this value. Negative disables.",
     )
     parser.add_argument("--layers", nargs="+", type=int, default=list(range(28)))
+    parser.add_argument(
+        "--task-write-layers",
+        default="",
+        help=(
+            "Optional semicolon-separated per-task write layers. Example: "
+            "'4,8,12,16,20,24,27;24,27' writes task0 on all listed layers and task1 only on 24,27."
+        ),
+    )
     parser.add_argument("--ridge", type=float, default=1.0)
     parser.add_argument("--eta", type=float, default=1.0)
     parser.add_argument("--max-update-norm", type=float, default=50.0)
@@ -121,6 +158,7 @@ def parse_args() -> argparse.Namespace:
             "associative_binding",
             "predictive_residual",
             "relational_aggregate",
+            "global_coherence_relational",
             "relational_residual",
             "compatibility_residual",
             "conditional_relation_innovation",
@@ -165,6 +203,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--intrinsic-surprise-exp-temperature", type=float, default=2.0)
     parser.add_argument("--intrinsic-surprise-exp-cap", type=float, default=20.0)
     parser.add_argument("--intrinsic-surprise-prediction-ridge", type=float, default=1.0)
+    parser.add_argument("--intrinsic-surprise-pair-quantile", type=float, default=0.0)
+    parser.add_argument("--intrinsic-surprise-row-quantile", type=float, default=0.0)
+    parser.add_argument(
+        "--intrinsic-surprise-context-target-mode",
+        choices=["full", "surprising_pairs_only"],
+        default="full",
+    )
+    parser.add_argument("--global-coherence-context-rank", type=int, default=8)
+    parser.add_argument("--global-coherence-position-rank", type=int, default=2)
+    parser.add_argument("--global-coherence-ridge", type=float, default=1e-3)
+    parser.add_argument("--global-coherence-support-power", type=float, default=0.0)
+    parser.add_argument("--global-coherence-min-support-gain", type=float, default=0.0)
     parser.add_argument("--intrinsic-span-readout-bridge", action="store_true")
     parser.add_argument("--intrinsic-span-readout-scale", type=float, default=1.0)
     parser.add_argument("--intrinsic-span-readout-max-items", type=int, default=32)
@@ -236,6 +286,8 @@ def parse_args() -> argparse.Namespace:
             "prism_q",
             "tdmi_q",
             "wm_coherence",
+            "gsci",
+            "tgvq",
             "tag_ce",
             "cage_ce",
             "trace_q",
@@ -246,6 +298,37 @@ def parse_args() -> argparse.Namespace:
         ],
         default="none",
     )
+    parser.add_argument("--gsci-graph-top-k", type=int, default=8)
+    parser.add_argument("--gsci-smooth-gamma", type=float, default=0.35)
+    parser.add_argument("--gsci-gate-temperature", type=float, default=0.75)
+    parser.add_argument("--gsci-gate-cap", type=float, default=20.0)
+    parser.add_argument("--gsci-gate-floor", type=float, default=0.05)
+    parser.add_argument("--gsci-row-nuisance-rank", type=int, default=16)
+    parser.add_argument("--gsci-value-nuisance-rank", type=int, default=32)
+    parser.add_argument("--gsci-low-innovation-quantile", type=float, default=0.35)
+    parser.add_argument("--gsci-capture-mode", choices=["innovation", "tag_capture"], default="innovation")
+    parser.add_argument("--gsci-latent-basis-mode", choices=["shared", "separate"], default="shared")
+    parser.add_argument("--gsci-object-row-rank", type=int, default=16)
+    parser.add_argument("--gsci-object-value-rank", type=int, default=32)
+    parser.add_argument("--gsci-object-quantile", type=float, default=0.75)
+    parser.add_argument("--gsci-latent-temperature", type=float, default=1.0)
+    parser.add_argument("--gsci-value-target-mode", choices=["full", "object_bandpass"], default="full")
+    parser.add_argument("--gsci-value-residual-floor", type=float, default=1.0)
+    parser.add_argument("--gsci-schur-weight", type=float, default=1.0)
+    parser.add_argument("--gsci-schur-mode", choices=["residualize", "design"], default="design")
+    parser.add_argument("--gsci-ghost-ridge", type=float, default=1e-5)
+    parser.add_argument("--gsci-disable-schur", action="store_true")
+    parser.add_argument("--gsci-shuffle-graph", action="store_true")
+    parser.add_argument("--tgvq-observer-rank", type=int, default=64)
+    parser.add_argument("--tgvq-object-row-rank", type=int, default=16)
+    parser.add_argument("--tgvq-ghost-row-rank", type=int, default=12)
+    parser.add_argument("--tgvq-object-signature-rank", type=int, default=16)
+    parser.add_argument("--tgvq-ghost-signature-rank", type=int, default=16)
+    parser.add_argument("--tgvq-graph-top-k", type=int, default=8)
+    parser.add_argument("--tgvq-horizon", type=int, default=2)
+    parser.add_argument("--tgvq-ghost-penalty", type=float, default=1.0)
+    parser.add_argument("--tgvq-object-preserve", type=float, default=2.0)
+    parser.add_argument("--tgvq-correction-cap", type=float, default=0.35)
     parser.add_argument("--karp-key-rank", type=int, default=64)
     parser.add_argument("--karp-value-rank", type=int, default=64)
     parser.add_argument("--karp-low-surprise-quantile", type=float, default=0.35)
@@ -499,6 +582,13 @@ def main() -> None:
     output_dir = Path(args.output)
     metrics_path, updates_path, lessons_path, questions_path, details_path = write_config(args, output_dir)
 
+    if args.task_indices.strip():
+        task_indices = [int(part.strip()) for part in args.task_indices.split(",") if part.strip()]
+    else:
+        task_indices = list(range(args.tasks))
+    task_write_layers = parse_task_write_layers(args.task_write_layers, args.layers, len(task_indices))
+    install_layers = sorted({layer for layers in task_write_layers for layer in layers})
+
     progress("loading model")
     model, tokenizer, device = load_model_and_tokenizer(
         args.model,
@@ -507,13 +597,9 @@ def main() -> None:
         attn_implementation=args.attn_implementation or None,
     )
     progress(f"loaded model on {device}; installing all-layer MLP memories")
-    wrappers = install_additive_memory(model, args.layers, memory_dtype=torch.float32)
+    wrappers = install_additive_memory(model, install_layers, memory_dtype=torch.float32)
     progress(f"installed wrappers for {len(wrappers)} layers")
 
-    if args.task_indices.strip():
-        task_indices = [int(part.strip()) for part in args.task_indices.split(",") if part.strip()]
-    else:
-        task_indices = list(range(args.tasks))
     profiles = [task_profile(idx) for idx in task_indices]
     final_lesson_idx = args.lessons_per_task - 1
     lesson_texts: list[list[str]] = []
@@ -766,24 +852,30 @@ def main() -> None:
     old_negative_keys: dict[int, torch.Tensor] = {}
 
     for step, profile in enumerate(profiles):
-        progress(f"writing task={step} language={profile.name} from lessons only")
+        step_layers = task_write_layers[step]
+        progress(f"writing task={step} language={profile.name} from lessons only layers={step_layers}")
         step_started = time.time()
         selected_keys: dict[int, list[torch.Tensor]] = {}
-        run_intrinsic_surprise_writes(
-            model,
-            tokenizer,
-            wrappers,
-            lesson_texts[step],
-            args,
-            device,
-            updates_path,
-            slot_id=None,
-            dice_anti_lesson_texts=dice_anti_lesson_texts[step],
-            extra_negative_keys_by_layer=old_negative_keys if args.old_task_negative_keys else None,
-            selected_keys_out_by_layer=selected_keys if args.old_task_negative_keys else None,
-            max_extra_negative_rows=args.old_task_negative_max_rows,
-            extra_negative_scale=args.old_task_negative_scale,
-        )
+        original_layers = args.layers
+        args.layers = step_layers
+        try:
+            run_intrinsic_surprise_writes(
+                model,
+                tokenizer,
+                wrappers,
+                lesson_texts[step],
+                args,
+                device,
+                updates_path,
+                slot_id=None,
+                dice_anti_lesson_texts=dice_anti_lesson_texts[step],
+                extra_negative_keys_by_layer=old_negative_keys if args.old_task_negative_keys else None,
+                selected_keys_out_by_layer=selected_keys if args.old_task_negative_keys else None,
+                max_extra_negative_rows=args.old_task_negative_max_rows,
+                extra_negative_scale=args.old_task_negative_scale,
+            )
+        finally:
+            args.layers = original_layers
         if args.old_task_negative_keys:
             for layer_idx, chunks in selected_keys.items():
                 if not chunks:
@@ -804,6 +896,7 @@ def main() -> None:
                 "step": step,
                 "task_idx": step,
                 "language": profile.name,
+                "write_layers": step_layers,
                 "seconds": time.time() - started,
                 "step_seconds": time.time() - step_started,
             },

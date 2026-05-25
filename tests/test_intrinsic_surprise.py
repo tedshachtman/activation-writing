@@ -9,6 +9,8 @@ from caic.intrinsic_surprise import (
     down_output_basis_specificity,
     down_value_specificity,
     gauge_canonical_key_scale,
+    gsci_design_solve_update,
+    gsci_transform_targets,
     karp_purify_update,
     lesson_persistence_weights,
     mlp_gauge_salience,
@@ -21,6 +23,7 @@ from caic.intrinsic_surprise import (
     qrico_purify_update,
     tag_ce_purify_update,
     tdmi_q_transport_scores,
+    tgvq_project_update,
     trace_q_purify_update,
     wm_coherence_scores,
     select_intrinsic_associative_binding_write,
@@ -28,6 +31,7 @@ from caic.intrinsic_surprise import (
     select_intrinsic_conditional_relation_innovation_write,
     select_intrinsic_conjunctive_feature_birth_update,
     select_intrinsic_feature_birth_update,
+    select_intrinsic_global_coherence_relational_write,
     select_intrinsic_predictive_residual_write,
     select_intrinsic_relational_aggregate_write,
     select_intrinsic_relational_residual_write,
@@ -403,6 +407,316 @@ def test_relational_aggregate_context_mode_writes_full_value_context():
     assert selection.target_keys[0, key_idx] == 0
     assert torch.count_nonzero(selection.target_keys[0]).item() >= 2
     assert torch.allclose(selection.targets, selection.target_keys)
+
+
+def test_relational_aggregate_context_mode_can_write_surprising_pairs_only():
+    layer = DummyLayer()
+    keys = torch.tensor(
+        [
+            [1.0, 0.0, 2.0, 2.0],
+            [2.0, 0.0, 4.0, 4.0],
+            [3.0, 5.0, 6.0, 7.0],
+        ]
+    )
+    down = torch.eye(4)
+    selection = select_intrinsic_relational_aggregate_write(
+        keys,
+        layer,
+        down,
+        token_mode="last",
+        feature_top_k=4,
+        key_feature_top_k=1,
+        value_feature_top_k=3,
+        pair_top_k=1,
+        prediction_ridge=0.01,
+        relation_value_mode="context",
+        relation_context_target_mode="surprising_pairs_only",
+    )
+    key_idx = int(selection.feature_indices[0].item())
+    assert selection.target_keys[0, key_idx] == 0
+    assert torch.count_nonzero(selection.target_keys[0]).item() == 1
+    assert torch.allclose(selection.targets, selection.target_keys)
+
+
+def test_global_coherence_relational_uses_current_context_residual():
+    layer = DummyLayer()
+    keys = torch.tensor(
+        [
+            [1.0, 2.0, 0.5, 0.0],
+            [2.0, 4.0, 0.5, 0.0],
+            [3.0, 6.0, 0.5, 0.0],
+            [4.0, 9.0, 5.0, 3.0],
+        ]
+    )
+    down = torch.eye(4)
+    selection = select_intrinsic_global_coherence_relational_write(
+        keys,
+        layer,
+        down,
+        token_mode="last",
+        feature_top_k=4,
+        key_feature_top_k=2,
+        value_feature_top_k=3,
+        pair_top_k=2,
+        relation_value_mode="context",
+        relation_context_target_mode="surprising_pairs_only",
+        context_rank=0,
+        position_rank=0,
+    )
+    assert selection.keys.shape[0] >= 1
+    assert torch.linalg.vector_norm(selection.targets).item() > 0
+    assert selection.diagnostics is not None
+    assert selection.diagnostics["global_coherence_raw_pairs"] >= selection.keys.shape[0]
+    assert "global_coherence_support_gain_mean" in selection.diagnostics
+
+
+def test_gsci_transform_targets_absorbs_generic_row_value_field():
+    keys = torch.eye(4)
+    targets = torch.tensor(
+        [
+            [1.0, 0.2],
+            [1.0, -0.1],
+            [1.0, 0.3],
+            [1.0, -0.2],
+        ]
+    )
+    weights = torch.ones(4)
+    result = gsci_transform_targets(
+        keys=keys,
+        targets=targets,
+        weights=weights,
+        all_outputs=targets,
+        token_indices=torch.arange(4),
+        down_weight=torch.eye(2, 4),
+        output_basis=torch.tensor([[1.0, 0.0]]),
+        graph_top_k=2,
+        row_nuisance_rank=2,
+        value_nuisance_rank=1,
+        gate_temperature=1.0,
+        gate_cap=4.0,
+        gate_floor=0.25,
+    )
+    assert result.targets.shape == targets.shape
+    assert result.weights.shape == weights.shape
+    assert torch.all(result.weights >= 0)
+    assert result.diagnostics["gsci_schur_absorbed_ratio"] > 0.0
+    assert torch.linalg.vector_norm(result.targets[:, 0]) < torch.linalg.vector_norm(targets[:, 0])
+
+
+def test_gsci_design_solve_fits_ghost_without_writing_it():
+    keys = torch.eye(4)
+    targets = torch.tensor(
+        [
+            [1.0, 0.5],
+            [1.0, -0.5],
+            [1.0, 0.5],
+            [1.0, -0.5],
+        ]
+    )
+    update, stats, diagnostics = gsci_design_solve_update(
+        keys=keys,
+        targets=targets,
+        positive_weights=torch.ones(4),
+        row_basis=torch.ones(1, 4) / 2.0,
+        value_basis=torch.tensor([[1.0, 0.0]]),
+        ridge=1e-4,
+        negative_weight=0.0,
+        output_penalty_weight=0.0,
+        ghost_ridge=1e-8,
+    )
+    fit = keys @ update.T
+    assert diagnostics["gsci_design_fallback"] == 0.0
+    assert stats.positive_rows == 4
+    assert torch.linalg.vector_norm(fit[:, 0]) < 0.1
+    assert torch.linalg.vector_norm(fit[:, 1] - targets[:, 1]) < 0.1
+
+
+def test_gsci_tag_capture_keeps_rich_targets_as_write_content():
+    keys = torch.eye(5)
+    targets = torch.tensor(
+        [
+            [1.0, 0.0, 0.2],
+            [1.0, 0.1, 0.2],
+            [1.0, -0.1, 0.2],
+            [0.0, 2.0, -1.0],
+            [1.0, 0.0, 0.2],
+        ]
+    )
+    result = gsci_transform_targets(
+        keys=keys,
+        targets=targets,
+        weights=torch.ones(5),
+        all_outputs=targets,
+        token_indices=torch.arange(5),
+        down_weight=torch.eye(3, 5),
+        output_basis=torch.tensor([[1.0, 0.0, 0.0]]),
+        graph_top_k=2,
+        capture_mode="tag_capture",
+        schur_mode="design",
+        row_nuisance_rank=3,
+        value_nuisance_rank=2,
+        gate_temperature=1.0,
+        gate_cap=5.0,
+    )
+    assert result.targets.shape == targets.shape
+    assert result.diagnostics["gsci_capture_mode_tag_capture"] == 1.0
+    assert result.diagnostics["gsci_capture_latent_gate_mean"] > 0.0
+    nonzero = targets.abs() > 1e-6
+    ratios = result.targets[nonzero] / targets[nonzero]
+    assert torch.allclose(ratios, result.gates.unsqueeze(1).expand_as(targets)[nonzero])
+
+
+def test_gsci_tag_capture_separate_latent_bases_are_used():
+    keys = torch.eye(6)
+    targets = torch.tensor(
+        [
+            [1.0, 0.0, 0.1],
+            [1.0, 0.1, 0.1],
+            [1.0, -0.1, 0.1],
+            [0.0, 2.0, -1.0],
+            [0.0, 1.8, -0.9],
+            [1.0, 0.0, 0.1],
+        ]
+    )
+    result = gsci_transform_targets(
+        keys=keys,
+        targets=targets,
+        weights=torch.ones(6),
+        all_outputs=targets,
+        token_indices=torch.arange(6),
+        down_weight=torch.eye(3, 6),
+        output_basis=torch.tensor([[1.0, 0.0, 0.0]]),
+        graph_top_k=2,
+        capture_mode="tag_capture",
+        latent_basis_mode="separate",
+        object_row_rank=3,
+        object_value_rank=2,
+        object_quantile=0.6,
+        schur_mode="design",
+        row_nuisance_rank=3,
+        value_nuisance_rank=2,
+    )
+    assert result.diagnostics["gsci_capture_separate_latent"] == 1.0
+    assert result.diagnostics["gsci_capture_object_row_rank"] > 0
+    assert result.diagnostics["gsci_capture_object_value_rank"] > 0
+    assert result.diagnostics["gsci_capture_latent_gate_min"] < result.diagnostics["gsci_capture_latent_gate_max"]
+
+
+def test_gsci_object_bandpass_targets_keep_object_value_subspace():
+    keys = torch.eye(6)
+    targets = torch.tensor(
+        [
+            [1.0, 0.0, 0.0],
+            [1.0, 0.1, 0.0],
+            [1.0, -0.1, 0.0],
+            [0.0, 3.0, 1.0],
+            [0.0, 2.8, 1.1],
+            [1.0, 0.0, 0.0],
+        ]
+    )
+    full = gsci_transform_targets(
+        keys=keys,
+        targets=targets,
+        weights=torch.ones(6),
+        all_outputs=targets,
+        token_indices=torch.arange(6),
+        down_weight=torch.eye(3, 6),
+        output_basis=torch.tensor([[1.0, 0.0, 0.0]]),
+        graph_top_k=2,
+        capture_mode="tag_capture",
+        latent_basis_mode="separate",
+        object_row_rank=3,
+        object_value_rank=1,
+        object_quantile=0.6,
+        schur_mode="design",
+        row_nuisance_rank=3,
+        value_nuisance_rank=2,
+        gate_temperature=10.0,
+        gate_cap=1.1,
+    )
+    band = gsci_transform_targets(
+        keys=keys,
+        targets=targets,
+        weights=torch.ones(6),
+        all_outputs=targets,
+        token_indices=torch.arange(6),
+        down_weight=torch.eye(3, 6),
+        output_basis=torch.tensor([[1.0, 0.0, 0.0]]),
+        graph_top_k=2,
+        capture_mode="tag_capture",
+        latent_basis_mode="separate",
+        object_row_rank=3,
+        object_value_rank=1,
+        object_quantile=0.6,
+        value_target_mode="object_bandpass",
+        value_residual_floor=0.0,
+        schur_mode="design",
+        row_nuisance_rank=3,
+        value_nuisance_rank=2,
+        gate_temperature=10.0,
+        gate_cap=1.1,
+    )
+    assert band.diagnostics["gsci_value_target_object_bandpass"] == 1.0
+    assert torch.linalg.vector_norm(band.targets) < torch.linalg.vector_norm(full.targets)
+    assert band.diagnostics["gsci_value_bandpass_residual_ratio"] == 0.0
+
+
+def test_tgvq_conditional_value_permission():
+    update = torch.tensor(
+        [
+            [1.0, 0.0],
+            [0.0, 1.0],
+        ]
+    )
+    keys = torch.eye(2)
+    observer = torch.eye(2)
+    generic_rows = torch.tensor([[1.0], [0.0]])
+    object_rows = torch.tensor([[0.0], [1.0]])
+    sig = torch.tensor([[1.0, 0.0]])
+    result = tgvq_project_update(
+        update,
+        keys=keys,
+        observer_basis=observer,
+        generic_row_basis=generic_rows,
+        object_row_basis=object_rows,
+        generic_signature_basis=sig,
+        object_signature_basis=sig,
+        ridge=1e-4,
+        ghost_penalty=100.0,
+        object_preserve=100.0,
+        correction_cap=1.0,
+    )
+    fit_before = keys @ update.T
+    fit_after = keys @ result.update.T
+    assert abs(float(fit_after[0, 0])) < abs(float(fit_before[0, 0]))
+    assert abs(float(fit_after[1, 0] - fit_before[1, 0])) < 0.05
+    assert result.diagnostics["tgvq_ghost_ratio_after"] < 0.5
+
+
+def test_tgvq_preserves_unconstrained_high_rank_residual():
+    update = torch.tensor(
+        [
+            [1.0, 0.0, 3.0],
+            [0.0, 1.0, -2.0],
+        ]
+    )
+    keys = torch.eye(3)
+    observer = torch.eye(2)
+    generic_rows = torch.tensor([[1.0], [0.0], [0.0]])
+    sig = torch.tensor([[1.0, 0.0]])
+    result = tgvq_project_update(
+        update,
+        keys=keys,
+        observer_basis=observer,
+        generic_row_basis=generic_rows,
+        object_row_basis=torch.empty(3, 0),
+        generic_signature_basis=sig,
+        object_signature_basis=torch.empty(0, 2),
+        ridge=1e-4,
+        ghost_penalty=100.0,
+        correction_cap=1.0,
+    )
+    assert torch.allclose(result.update[:, 2], update[:, 2], atol=1e-3)
 
 
 def test_lesson_persistence_downweights_one_off_spike():
