@@ -438,6 +438,40 @@ def test_relational_aggregate_context_mode_can_write_surprising_pairs_only():
     assert torch.allclose(selection.targets, selection.target_keys)
 
 
+def test_relational_aggregate_order3_uses_closed_triangle_support():
+    layer = DummyLayer()
+    keys = torch.tensor(
+        [
+            [1.0, 0.0, 2.0, 0.5],
+            [2.0, 0.0, 4.0, 1.0],
+            [3.0, 5.0, 6.0, 7.0],
+        ]
+    )
+    down = torch.eye(4)
+    selection = select_intrinsic_relational_aggregate_write(
+        keys,
+        layer,
+        down,
+        token_mode="last",
+        feature_top_k=4,
+        key_feature_top_k=1,
+        value_feature_top_k=3,
+        pair_top_k=4,
+        prediction_ridge=0.01,
+        relation_value_mode="context",
+        relation_context_target_mode="surprising_pairs_only",
+        relation_order=3,
+        triangle_top_k=2,
+    )
+    assert selection.diagnostics is not None
+    assert selection.diagnostics["relational_order"] == 3.0
+    assert selection.diagnostics["relational_triangle_kept"] > 0
+    key_idx = int(selection.feature_indices[0].item())
+    assert selection.target_keys[0, key_idx] == 0
+    assert torch.count_nonzero(selection.target_keys[0]).item() >= 2
+    assert torch.allclose(selection.targets, selection.target_keys)
+
+
 def test_global_coherence_relational_uses_current_context_residual():
     layer = DummyLayer()
     keys = torch.tensor(

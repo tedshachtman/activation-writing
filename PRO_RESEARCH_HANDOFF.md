@@ -3745,3 +3745,43 @@ replay, probes, labels, or sidecar state.
 A proposed method should beat this baseline directly. On the strict fixture, it
 must preserve close to the raw seven-item single-task payload and improve the
 after-task1 c2w/margin profile; otherwise it is not progress.
+
+## Postscript 24: TRI-REL v1 Negative Result
+
+Tested first-pass higher-order relation indexing:
+
+```text
+--intrinsic-surprise-relation-order 3
+```
+
+The implementation keeps the runtime write address as a normal sparse MLP
+feature. The third feature only indexes/weights which pair relation is selected,
+so it satisfies the current deployment constraint: no new runtime conjunction
+detector, no sidecar, no probes, no labels.
+
+Strict Lyran single-task, 7-layer scale `.075`:
+
+| Method | Edited | c2w | drop | max drop | Correct items |
+| --- | ---: | ---: | ---: | ---: | --- |
+| pair raw relational/context-value | `7/20` | `0` | `1.664` | `6.950` | `1,2,4,5,7,14,17` |
+| order-3, full context target | `6/20` | `0` | `1.824` | `7.500` | `1,2,4,5,7,17` |
+| order-3, motif target only | `3/20` | `1` | `1.447` | `4.055` | `2,5,14` |
+| order-3, selective full target | `6/20` | `2` | `2.267` | `7.319` | `1,2,4,5,7,17` |
+
+The naive triangle filter was too permissive: mean raw/kept triangle-pair counts
+were `7098/7095`. Tightening with normalized triangle support reduced kept
+pairs to mean `4039`, but worsened sentinel behavior and did not restore the
+lost item.
+
+Conclusion:
+
+- Generic closed feature triangles are not a useful higher-order coordinate in
+  this form.
+- The order-3 motif-only target confirms that replacing the full context-value
+  carrier still strips threshold mass.
+- If higher-order relations remain on the table, they probably need typed or
+  factored role motifs derived from current-context structure, not arbitrary
+  feature-triangle closure.
+
+The live target is unchanged: keep the raw `.075` relational/context-value
+carrier but reduce task1 margin damage and sentinel c2w without sidecar state.

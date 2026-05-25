@@ -8023,6 +8023,12 @@ def select_intrinsic_relational_aggregate_write(
     key_feature_top_k: int = 8,
     value_feature_top_k: int = 32,
     pair_top_k: int = 64,
+    relation_order: int = 2,
+    triangle_top_k: int = 4,
+    triangle_min_closure: float = 0.0,
+    triangle_min_gain: float = 0.0,
+    triangle_min_pair_ratio: float = 0.0,
+    triangle_power: float = 0.5,
     pair_score_quantile: float = 0.0,
     row_score_quantile: float = 0.0,
     bidirectional_pairs: bool = False,
@@ -8046,6 +8052,11 @@ def select_intrinsic_relational_aggregate_write(
     single-forward relational surprise test, then groups selected pairs by
     trigger feature so one sparse trigger retrieves a weighted mixture of all
     surprising paired value channels at that token.
+
+    With ``relation_order=3``, pair contributions must be supported by a closed
+    feature triangle. The triangle is used only to index/select the written
+    relation; the runtime key remains an ordinary sparse MLP feature row, so the
+    resulting memory is still addressable by the existing model path.
     """
 
     keys_f = keys.detach().float().cpu()
@@ -8091,6 +8102,8 @@ def select_intrinsic_relational_aggregate_write(
         raise ValueError(f"Unknown relation_value_mode {relation_value_mode!r}")
     if relation_context_target_mode not in {"full", "surprising_pairs_only"}:
         raise ValueError(f"Unknown relation_context_target_mode {relation_context_target_mode!r}")
+    if int(relation_order) not in {2, 3}:
+        raise ValueError(f"relation_order must be 2 or 3, got {relation_order!r}")
 
     scale = mlp_weight_prior_scale(layer, keys_f.shape[1]).to(keys_f.device).clamp_min(1e-12)
     z_keys = score_keys_f / scale.unsqueeze(0)
@@ -8098,6 +8111,12 @@ def select_intrinsic_relational_aggregate_write(
     cause_k = max(1, min(int(key_feature_top_k), candidate_k - 1))
     value_k = max(1, min(int(value_feature_top_k), candidate_k - 1))
     max_pairs = max(1, int(pair_top_k))
+    max_triangles = max(1, int(triangle_top_k))
+    triangle_closure_values: list[float] = []
+    triangle_gain_values: list[float] = []
+    triangle_pair_ratio_values: list[float] = []
+    triangle_raw_count = 0
+    triangle_kept_count = 0
 
     for token_idx in token_indices.tolist():
         token_key = keys_f[token_idx]
@@ -8108,38 +8127,98 @@ def select_intrinsic_relational_aggregate_write(
         value_features = candidates[: max(cause_k + 1, min(candidate_k, value_k + cause_k))]
 
         history = _prediction_history(z_keys, token_idx, min_rows=4)
-        pair_rows: list[tuple[float, int, int, float]] = []
+        pair_cache: dict[tuple[int, int], tuple[float, float]] = {}
+
+        def score_pair(left_idx: int, right_idx: int) -> tuple[float, float] | None:
+            if left_idx == right_idx:
+                return None
+            key = (left_idx, right_idx) if left_idx < right_idx else (right_idx, left_idx)
+            if key in pair_cache:
+                return pair_cache[key]
+            current_product = token_z[left_idx] * token_z[right_idx]
+            if float(current_product.abs().item()) <= 1e-12:
+                return None
+            hist_i = history[:, left_idx]
+            hist_j = history[:, right_idx]
+            product_hist = hist_i * hist_j
+            x_aug = torch.stack([hist_i, hist_j, torch.ones_like(hist_i)], dim=1)
+            ridge_diag = torch.eye(x_aug.shape[1], dtype=x_aug.dtype)
+            ridge_diag[-1, -1] = 0.0
+            system = x_aug.T @ x_aug + float(prediction_ridge) * ridge_diag
+            coeff = _solve_symmetric_psd(system, (x_aug.T @ product_hist).unsqueeze(1)).squeeze(1)
+            token_aug = torch.tensor([token_z[left_idx], token_z[right_idx], 1.0], dtype=x_aug.dtype)
+            predicted = token_aug @ coeff
+            excess = (current_product.abs() - predicted.abs()).clamp_min(0.0)
+            if float(excess.item()) <= 1e-12:
+                return None
+            fit_hist = x_aug @ coeff
+            residual_var = (product_hist - fit_hist).var(unbiased=False).clamp_min(1e-6)
+            feature_pair_score = torch.sqrt(
+                token_scores[left_idx].clamp_min(1e-12) * token_scores[right_idx].clamp_min(1e-12)
+            )
+            pair_score = (excess.square() / residual_var) * feature_pair_score
+            if not torch.isfinite(pair_score):
+                return None
+            gain = (excess / current_product.abs().clamp_min(1e-6)).clamp(max=2.0)
+            result = (float(pair_score.item()), float(gain.item()))
+            pair_cache[key] = result
+            return result
+
+        if int(relation_order) >= 3:
+            candidate_list = [int(idx) for idx in candidates.tolist()]
+            for left_pos, left_idx in enumerate(candidate_list):
+                for right_idx in candidate_list[left_pos + 1 :]:
+                    score_pair(left_idx, right_idx)
+
+        pair_rows: list[tuple[float, int, int, float, tuple[int, ...]]] = []
         for cause_idx in cause_features.tolist():
             for value_idx in value_features.tolist():
-                if value_idx == cause_idx:
+                pair = score_pair(cause_idx, value_idx)
+                if pair is None:
                     continue
-                current_product = token_z[cause_idx] * token_z[value_idx]
-                if float(current_product.abs().item()) <= 1e-12:
-                    continue
-                hist_i = history[:, cause_idx]
-                hist_j = history[:, value_idx]
-                product_hist = hist_i * hist_j
-                x_aug = torch.stack([hist_i, hist_j, torch.ones_like(hist_i)], dim=1)
-                ridge_diag = torch.eye(x_aug.shape[1], dtype=x_aug.dtype)
-                ridge_diag[-1, -1] = 0.0
-                system = x_aug.T @ x_aug + float(prediction_ridge) * ridge_diag
-                coeff = _solve_symmetric_psd(system, (x_aug.T @ product_hist).unsqueeze(1)).squeeze(1)
-                token_aug = torch.tensor([token_z[cause_idx], token_z[value_idx], 1.0], dtype=x_aug.dtype)
-                predicted = token_aug @ coeff
-                excess = (current_product.abs() - predicted.abs()).clamp_min(0.0)
-                if float(excess.item()) <= 1e-12:
-                    continue
-                fit_hist = x_aug @ coeff
-                residual_var = (product_hist - fit_hist).var(unbiased=False).clamp_min(1e-6)
-                feature_pair_score = torch.sqrt(
-                    token_scores[cause_idx].clamp_min(1e-12)
-                    * token_scores[value_idx].clamp_min(1e-12)
-                )
-                pair_score = (excess.square() / residual_var) * feature_pair_score
-                if not torch.isfinite(pair_score):
-                    continue
-                gain = (excess / current_product.abs().clamp_min(1e-6)).clamp(max=2.0)
-                pair_rows.append((float(pair_score.item()), cause_idx, value_idx, float(gain.item())))
+                pair_score_float, gain_float = pair
+                support_features: tuple[int, ...] = ()
+                if int(relation_order) >= 3:
+                    triangle_raw_count += 1
+                    closure_rows: list[tuple[float, int]] = []
+                    for third_idx in candidates.tolist():
+                        third_idx = int(third_idx)
+                        if third_idx == cause_idx or third_idx == value_idx:
+                            continue
+                        left = score_pair(cause_idx, third_idx)
+                        right = score_pair(value_idx, third_idx)
+                        if left is None or right is None:
+                            continue
+                        closure = (left[0] * right[0]) ** 0.5
+                        if float(closure) <= float(triangle_min_closure):
+                            continue
+                        closure_rows.append((float(closure), third_idx))
+                    if not closure_rows:
+                        continue
+                    closure_rows.sort(key=lambda item: item[0], reverse=True)
+                    closure_rows = closure_rows[:max_triangles]
+                    closure_values = torch.tensor([row[0] for row in closure_rows], dtype=torch.float32)
+                    closure_mean_tensor = closure_values.mean()
+                    closure_mean = float(closure_mean_tensor.item())
+                    pair_scores_for_token = torch.tensor(
+                        [row[0] for row in pair_cache.values()], dtype=torch.float32
+                    )
+                    pair_median = pair_scores_for_token.median().clamp_min(1e-12)
+                    closure_gain_raw = closure_mean_tensor / pair_median
+                    closure_pair_ratio = closure_mean_tensor / max(float(pair_score_float), 1e-12)
+                    if float(closure_gain_raw.item()) < float(triangle_min_gain):
+                        continue
+                    if float(closure_pair_ratio.item()) < float(triangle_min_pair_ratio):
+                        continue
+                    closure_gain = closure_gain_raw.clamp_min(1e-12).pow(float(triangle_power))
+                    closure_gain = closure_gain.clamp(min=0.05, max=4.0)
+                    pair_score_float = float(pair_score_float * closure_gain.item())
+                    support_features = tuple(int(row[1]) for row in closure_rows)
+                    triangle_closure_values.append(closure_mean)
+                    triangle_gain_values.append(float(closure_gain.item()))
+                    triangle_pair_ratio_values.append(float(closure_pair_ratio.item()))
+                    triangle_kept_count += 1
+                pair_rows.append((pair_score_float, int(cause_idx), int(value_idx), gain_float, support_features))
 
         if not pair_rows:
             continue
@@ -8151,11 +8230,11 @@ def select_intrinsic_relational_aggregate_write(
             if not pair_rows:
                 continue
         pair_rows.sort(key=lambda item: item[0], reverse=True)
-        grouped: dict[int, list[tuple[float, int, float]]] = {}
-        for pair_score_float, cause_idx, value_idx, gain_float in pair_rows[:max_pairs]:
-            grouped.setdefault(cause_idx, []).append((pair_score_float, value_idx, gain_float))
+        grouped: dict[int, list[tuple[float, int, float, tuple[int, ...]]]] = {}
+        for pair_score_float, cause_idx, value_idx, gain_float, support_features in pair_rows[:max_pairs]:
+            grouped.setdefault(cause_idx, []).append((pair_score_float, value_idx, gain_float, support_features))
             if bidirectional_pairs:
-                grouped.setdefault(value_idx, []).append((pair_score_float, cause_idx, gain_float))
+                grouped.setdefault(value_idx, []).append((pair_score_float, cause_idx, gain_float, support_features))
 
         for key_idx, values_for_key in grouped.items():
             key_activation = token_key[key_idx]
@@ -8166,7 +8245,14 @@ def select_intrinsic_relational_aggregate_write(
             if relation_value_mode == "context":
                 if relation_context_target_mode == "surprising_pairs_only":
                     context_features = torch.tensor(
-                        sorted({target_idx for _score, target_idx, _gain in values_for_key if target_idx != key_idx}),
+                        sorted(
+                            {
+                                feature_idx
+                                for _score, target_idx, _gain, support_features in values_for_key
+                                for feature_idx in (target_idx, *support_features)
+                                if feature_idx != key_idx
+                            }
+                        ),
                         dtype=torch.long,
                     )
                 else:
@@ -8174,7 +8260,9 @@ def select_intrinsic_relational_aggregate_write(
                 target_key[context_features] = token_key[context_features]
             else:
                 norm_weights = torch.sqrt(score_values / score_values.mean().clamp_min(1e-12)).clamp(max=4.0)
-                for norm_weight, (_pair_score, target_idx, gain_float) in zip(norm_weights, values_for_key, strict=False):
+                for norm_weight, (_pair_score, target_idx, gain_float, _support_features) in zip(
+                    norm_weights, values_for_key, strict=False
+                ):
                     value_gain = gain_float if relation_value_mode == "residual" else 1.0
                     target_activation = token_key[target_idx] * value_gain * float(norm_weight.item())
                     target_key[target_idx] += target_activation
@@ -8224,6 +8312,26 @@ def select_intrinsic_relational_aggregate_write(
         temperature=surprise_weight_temperature,
         max_weight=surprise_weight_cap,
     )
+    diagnostics = {
+        "relational_order": float(relation_order),
+        "relational_triangle_raw": float(triangle_raw_count),
+        "relational_triangle_kept": float(triangle_kept_count),
+        "relational_triangle_closure_mean": float(
+            sum(triangle_closure_values) / len(triangle_closure_values)
+        )
+        if triangle_closure_values
+        else 0.0,
+        "relational_triangle_gain_mean": float(sum(triangle_gain_values) / len(triangle_gain_values))
+        if triangle_gain_values
+        else 0.0,
+        "relational_triangle_pair_ratio_mean": float(
+            sum(triangle_pair_ratio_values) / len(triangle_pair_ratio_values)
+        )
+        if triangle_pair_ratio_values
+        else 0.0,
+        "relational_triangle_min_gain": float(triangle_min_gain),
+        "relational_triangle_min_pair_ratio": float(triangle_min_pair_ratio),
+    }
     return IntrinsicSurpriseSelection(
         keys=example_keys.contiguous(),
         targets=target_rows.contiguous(),
@@ -8233,6 +8341,7 @@ def select_intrinsic_relational_aggregate_write(
         feature_scores=feature_score_rows,
         target_keys=target_key_rows,
         feature_indices=feature_rows,
+        diagnostics=diagnostics,
     )
 
 

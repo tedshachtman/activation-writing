@@ -2926,6 +2926,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--intrinsic-surprise-key-feature-top-k", type=int, default=8)
     parser.add_argument("--intrinsic-surprise-value-feature-top-k", type=int, default=32)
     parser.add_argument("--intrinsic-surprise-pair-top-k", type=int, default=16)
+    parser.add_argument("--intrinsic-surprise-relation-order", type=int, choices=[2, 3], default=2)
+    parser.add_argument("--intrinsic-surprise-triangle-top-k", type=int, default=4)
+    parser.add_argument("--intrinsic-surprise-triangle-min-closure", type=float, default=0.0)
+    parser.add_argument("--intrinsic-surprise-triangle-min-gain", type=float, default=0.0)
+    parser.add_argument("--intrinsic-surprise-triangle-min-pair-ratio", type=float, default=0.0)
+    parser.add_argument("--intrinsic-surprise-triangle-power", type=float, default=0.5)
     parser.add_argument("--wicr-compatibility-threshold", type=float, default=0.15)
     parser.add_argument("--wicr-compatibility-temperature", type=float, default=0.15)
     parser.add_argument("--wicr-posture-pcs", type=int, default=64)
@@ -4094,6 +4100,12 @@ def run_intrinsic_surprise_writes(
                         key_feature_top_k=args.intrinsic_surprise_key_feature_top_k,
                         value_feature_top_k=args.intrinsic_surprise_value_feature_top_k,
                         pair_top_k=args.intrinsic_surprise_pair_top_k,
+                        relation_order=args.intrinsic_surprise_relation_order,
+                        triangle_top_k=args.intrinsic_surprise_triangle_top_k,
+                        triangle_min_closure=args.intrinsic_surprise_triangle_min_closure,
+                        triangle_min_gain=args.intrinsic_surprise_triangle_min_gain,
+                        triangle_min_pair_ratio=args.intrinsic_surprise_triangle_min_pair_ratio,
+                        triangle_power=args.intrinsic_surprise_triangle_power,
                         pair_score_quantile=args.intrinsic_surprise_pair_quantile,
                         row_score_quantile=args.intrinsic_surprise_row_quantile,
                         bidirectional_pairs=args.intrinsic_surprise_bidirectional_pairs,
@@ -5432,6 +5444,12 @@ def run_intrinsic_surprise_writes(
                     "intrinsic_exp_cap": args.intrinsic_surprise_exp_cap,
                     "intrinsic_prediction_ridge": args.intrinsic_surprise_prediction_ridge,
                     "intrinsic_pair_top_k": args.intrinsic_surprise_pair_top_k,
+                    "intrinsic_relation_order": args.intrinsic_surprise_relation_order,
+                    "intrinsic_triangle_top_k": args.intrinsic_surprise_triangle_top_k,
+                    "intrinsic_triangle_min_closure": args.intrinsic_surprise_triangle_min_closure,
+                    "intrinsic_triangle_min_gain": args.intrinsic_surprise_triangle_min_gain,
+                    "intrinsic_triangle_min_pair_ratio": args.intrinsic_surprise_triangle_min_pair_ratio,
+                    "intrinsic_triangle_power": args.intrinsic_surprise_triangle_power,
                     "intrinsic_pair_quantile": args.intrinsic_surprise_pair_quantile,
                     "intrinsic_row_quantile": args.intrinsic_surprise_row_quantile,
                     "intrinsic_bidirectional_pairs": bool(args.intrinsic_surprise_bidirectional_pairs),

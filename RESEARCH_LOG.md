@@ -9074,3 +9074,66 @@ Next proposed method direction:
   probably too weak to encode directed subject/verb/object motifs robustly.
   The first version should use typed/factored hyperedge indexing over
   runtime-addressable features, not brute-force triples.
+
+## 2026-05-25: TRI-REL v1 Higher-Order Relation Indexing
+
+Implemented first-pass third-order relational aggregate selection:
+
+```text
+--intrinsic-surprise-relation-order 3
+--intrinsic-surprise-triangle-top-k 4
+--intrinsic-surprise-triangle-min-gain
+--intrinsic-surprise-triangle-min-pair-ratio
+```
+
+The runtime key is still an ordinary sparse MLP feature, so the write remains
+addressable by the existing model path. The third feature is used only to index
+and weight which pair relation is selected. This tests the hypothesis that
+subject/verb/object-like motifs need more than pair closure without introducing
+a new runtime conjunction detector.
+
+Validation:
+
+```text
+python -m py_compile caic/intrinsic_surprise.py scripts/minilang_write.py scripts/minilang_intrinsic_continual.py
+python -m pytest tests/test_intrinsic_surprise.py -q  # 56 passed
+```
+
+Strict Lyran single-task, 7 layers, scale `.075`:
+
+| Method | Edited | c2w | drop | max drop | severe drops | Correct items |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| pair raw relational/context-value | `7/20` | `0` | `1.664` | `6.950` | `7` | `1,2,4,5,7,14,17` |
+| order-3, full context target | `6/20` | `0` | `1.824` | `7.500` | `9` | `1,2,4,5,7,17` |
+| order-3, motif target only | `3/20` | `1` | `1.447` | `4.055` | `9` | `2,5,14` |
+| order-3, selective full target | `6/20` | `2` | `2.267` | `7.319` | `11` | `1,2,4,5,7,17` |
+
+Runs:
+
+```text
+runs/strict_relational_order3_scale075_l7_eval20
+runs/strict_relational_order3_motif_scale075_l7_eval20
+runs/strict_relational_order3_selective_scale075_l7_eval20
+```
+
+Diagnostics:
+
+- Naive order-3 was not actually selective: mean `relational_triangle_raw`
+  `7098`, mean kept `7095`.
+- Selective order-3 reduced kept triangle pairs to mean `4039`, but did not
+  improve acquisition or safety.
+- Motif-only targets lowered update Frobenius from mean `4.42` to `3.01`, but
+  lost broad acquisition and introduced one sentinel flip.
+
+Interpretation:
+
+- Simple closed-triangle indexing is not the missing relation order. It either
+  behaves like pairwise raw with one fewer learned item, or it prunes the carrier
+  into a smaller unsafe/incomplete shard.
+- The useful role-binding signal is not recovered by generic feature triangles.
+  If higher-order indexing remains worth pursuing, it likely needs typed or
+  factored motifs from visible/current-context structure, not arbitrary closed
+  triangles over high-scoring native features.
+- Current live baseline remains raw relational/context-value `.075`: `7/20`
+  single-task, `5/20` retained after task1, Vomar `3/20`, but unsafe after task1
+  with `3` sentinel c2w and large margin drops.
