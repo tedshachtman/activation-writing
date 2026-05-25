@@ -9404,6 +9404,7 @@ Results:
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | raw, scale `.02` | `5/20` | `2` | `2.240` | `11.132` | `9` | `203.9` | `0.711` | `3,4,5,16,17` |
 | raw, scale `.01` | `4/20` | `1` | `1.721` | `8.898` | `8` | `204.0` | `0.567` | `3,4,5,16` |
+| raw, scale `.005` | `0/20` | `1` | `0.945` | `5.674` | `3` | `203.2` | `0.307` | none |
 | row `q75`, scale `.02` | `3/20` | `2` | `1.028` | `2.729` | `9` | `51.4` | `0.629` | `4,5,17` |
 | row `q90`, scale `.02` | `1/20` | `1` | `0.921` | `2.720` | `7` | `20.8` | `0.510` | `4` |
 | BPTC + row `q75`, scale `.01` | `2/20` | `2` | `0.776` | `1.802` | `6` | `51.2` | `0.385` | `2,16` |
@@ -9415,6 +9416,7 @@ Runs:
 ```text
 runs/teacher6_extra14_safe_micro_raw_s020_cap075_eval20
 runs/teacher6_extra14_safe_micro_raw_s010_cap075_eval20
+runs/teacher6_extra14_safe_micro_raw_s005_cap075_eval20
 runs/teacher6_extra14_safe_micro_rowq75_s020_cap075_eval20
 runs/teacher6_extra14_safe_micro_rowq90_s020_cap075_eval20
 runs/teacher6_extra14_bptc_rowq75_s010_cap075_eval20
