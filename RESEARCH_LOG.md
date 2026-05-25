@@ -9575,3 +9575,93 @@ column, single key effect, or ORCA atom residual. It should be a **functional
 maplet over a small role/key neighborhood**: a repeated transformation from a
 row-pattern neighborhood to an effect neighborhood that is present in
 same-language contexts and absent in rival-language contexts.
+
+## 2026-05-25: Methodology Reset - All-Layer Testing Is Mandatory
+
+New constraint from the user:
+
+```text
+all layers ALWAYS must be tested
+```
+
+Rationale:
+
+- The fact that many layers can amplify red/posture leakage is not a reason to
+  avoid all-layer testing. It is exactly the safety issue we need to expose.
+- A 7-layer band can still be useful for local debugging of tensor plumbing,
+  runtime, or item-profile anatomy, but it is no longer acceptable as a
+  promotion gate or safety claim.
+- Any method that looks safe only because it was tested on a hand-picked layer
+  subset should be treated as a likely false positive.
+
+Methodological rule going forward:
+
+```text
+Current evidence = all 28 MLP layers, same fixed teacher/eval fixture,
+expanded sentinel suite, no sidecar, no labels/probes/null/default prompts,
+and exactly the allowed one forward pass per weight update.
+```
+
+Prior 7-layer results remain useful for historical interpretation:
+
+- they identify that raw relational/context-value writes can contain an
+  acquisition-bearing carrier;
+- they show item-profile differences between raw, DICE, GSCI, and BPTC;
+- they help debug where a separator is acting.
+
+But they should not be used to conclude that a method is safe or promising.
+Every live candidate must have an all-layer result, and preferably an all-layer
+two-task result, before it is considered part of the frontier.
+
+Immediate implication:
+
+- Stop treating `layers: 4,8,12,16,20,24,27` as the standard benchmark.
+- Re-run the current slow micro-capture and separator ideas all-layer.
+- Compare against all-layer raw relational at matched total update budget, not
+  just matched per-layer scale.
+
+### First all-layer rebaseline under the reset
+
+Run:
+
+```text
+runs/alllayer_teacher6_extra14_raw_s005_cap075_eval20
+```
+
+Setup:
+
+```text
+teacher/eval context: standard 6 lessons, context = 20/20
+write contexts: 20 = 6 standard + 14 extra variants
+layers: all 28 MLP layers, 0..27
+carrier: raw relational_aggregate + context-value
+scale: .005
+cap: .75
+output/input protection: 256/10 and 256/20
+expanded sentinel suite
+```
+
+Result:
+
+| Method | Edited | c2w | before-correct drop | max drop | severe drops | Correct items |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| all-layer raw `.005` | `3/20` | `0` | `1.095` | `4.650` | `6` | `2,14,17` |
+
+Diagnostics:
+
+- Write phase completed `560` layer updates: 20 write contexts x 28 layers.
+- Runtime on local MPS was about `9.1` minutes end-to-end, with about `6.4`
+  minutes in the write phase.
+- Sentinel net accuracy improved because `3` initially-wrong sentinels flipped
+  right, but before-correct margin damage remained nontrivial. This is exactly
+  why all-layer testing is mandatory: c2w alone would call this clean, while the
+  margin profile still shows broad collateral movement.
+
+Interpretation:
+
+- All-layer slow raw is not dead. It acquires `3/20` with no c2w at this lower
+  scale.
+- It is not safe enough: the margin damage is still large enough to count as
+  red leakage.
+- Future separators should be judged against this all-layer baseline, not the
+  old 7-layer micro baseline.
