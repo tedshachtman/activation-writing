@@ -9366,3 +9366,95 @@ Interpretation:
 - This reframes the objective. We may not need every pass to learn much. We
   need the accepted components to be clean enough that many passes can compound
   without accumulating red/posture damage.
+
+## 2026-05-25: Teacher-Valid Micro-Capture and Separator Sweep
+
+The previous 20-context accumulation check had a serious caveat: the concatenated
+20-lesson context scored only `8/20` in-context on the fixed strict eval. I first
+tried to teacher-filter a new 20-lesson concatenated fixture, but long-context
+teacher scoring was too slow on local MPS to be a practical inner-loop benchmark.
+
+Added a runner option:
+
+```text
+--extra-write-variants N
+```
+
+This keeps the teacher/eval context as the normal lesson sequence while appending
+`N` diverse final-lesson variants to the write-only lesson list. The write still
+gets many independent small contexts, but the in-context teacher is not a giant
+concatenated prompt. The temporary extra contexts are discarded after the write.
+
+Clean benchmark setup:
+
+```text
+lessons-per-task: 6
+extra-write-variants: 14
+lesson-examples: 8
+teacher/eval context: standard 6 lessons, context = 20/20
+write contexts: 20 total = 6 standard + 14 extra variants
+layers: 4,8,12,16,20,24,27
+output/input protection: 256/10 and 256/20
+fixed eval: runs/strict_fixture_lyran_seed1_candidates80_eval20/eval_questions.jsonl
+```
+
+Results:
+
+| Method | Edited | c2w | drop | max drop | severe drops | selected rows | mean update Fro | Correct items |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| raw, scale `.02` | `5/20` | `2` | `2.240` | `11.132` | `9` | `203.9` | `0.711` | `3,4,5,16,17` |
+| raw, scale `.01` | `4/20` | `1` | `1.721` | `8.898` | `8` | `204.0` | `0.567` | `3,4,5,16` |
+| row `q75`, scale `.02` | `3/20` | `2` | `1.028` | `2.729` | `9` | `51.4` | `0.629` | `4,5,17` |
+| row `q90`, scale `.02` | `1/20` | `1` | `0.921` | `2.720` | `7` | `20.8` | `0.510` | `4` |
+| BPTC + row `q75`, scale `.01` | `2/20` | `2` | `0.776` | `1.802` | `6` | `51.2` | `0.385` | `2,16` |
+| BPTC + row `q90`, scale `.01` | `0/20` | `1` | `0.453` | `1.427` | `3` | `20.8` | `0.259` | none |
+| BPTC + row `q75`, scale `.005` | `0/20` | `1` | `0.351` | `0.887` | `0` | `51.2` | `0.194` | none |
+
+Runs:
+
+```text
+runs/teacher6_extra14_safe_micro_raw_s020_cap075_eval20
+runs/teacher6_extra14_safe_micro_raw_s010_cap075_eval20
+runs/teacher6_extra14_safe_micro_rowq75_s020_cap075_eval20
+runs/teacher6_extra14_safe_micro_rowq90_s020_cap075_eval20
+runs/teacher6_extra14_bptc_rowq75_s010_cap075_eval20
+runs/teacher6_extra14_bptc_rowq90_s010_cap075_eval20
+runs/teacher6_extra14_bptc_rowq75_s005_cap075_eval20
+```
+
+Interpretation:
+
+- The cleaner teacher-valid benchmark is harder on safety. Raw micro-capture
+  still acquires `4-5/20`, but it damages sentinels (`1-2` c2w) and has large
+  max margin drops.
+- Existing row-score quantile filtering is not a good enough separator. It
+  reduces max damage sharply, but c2w remains and acquisition collapses as the
+  threshold moves right.
+- BPTC in the slow/high-precision regime reduces margin damage more than raw or
+  row-quantile alone, and it changes the shard (`2,16` instead of `3,4,5,16,17`),
+  but it does not reach the desired regime. At the only acquiring point
+  (`2/20`), it still has `2` c2w. When scaled down enough to reduce margin
+  damage strongly, acquisition vanishes and c2w still does not hit zero.
+- This is a clean negative for BPTC v1 as the separator. The branch/precision
+  allocator is a damage reducer, not a red/blue separator.
+
+Scientific takeaway:
+
+The user's red/blue framing is now the right objective. We need a better
+separator that actually pushes semantic components and posture/default components
+farther apart before the slow accumulation threshold is applied. Existing
+relational row score, scale, and BPTC branch precision do not provide enough
+separation.
+
+Next direction:
+
+- Keep the teacher-valid multi-context benchmark.
+- Stop tuning BPTC v1 as a final method.
+- Search for a stronger transformer-native separator, likely contrastive or
+  transported:
+  - same-language extra write contexts versus same-format rival-language
+    anti-contexts, but applied in a functional/maplet coordinate rather than raw
+    matrix entries;
+  - or downstream transported graph-value quotients that penalize generic
+    row-pattern x downstream-posture effect while preserving object row-pattern
+    effects.

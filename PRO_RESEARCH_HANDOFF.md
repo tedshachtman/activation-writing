@@ -3977,3 +3977,73 @@ This supports the user's statistical framing: if semantic and posture components
 overlap, a one-shot high-recall boundary admits false positives. The safer
 strategy is to operate only in the high-confidence semantic tail and recover
 coverage through repeated independent contexts.
+
+## Postscript 28: Teacher-Valid Micro-Capture Separator Sweep
+
+The earlier 20-context accumulation check had a caveat: the concatenated
+20-lesson context scored only `8/20` in-context on the fixed strict eval. I
+first tried teacher-filtering a new 20-lesson concatenated fixture, but
+long-context teacher scoring was too slow locally for an inner-loop benchmark.
+
+Implemented:
+
+```text
+--extra-write-variants N
+```
+
+This appends `N` diverse final-lesson variants to the write-only lesson list
+while leaving the teacher/eval context as the normal lesson sequence. It lets us
+test many independent small write contexts without evaluating one huge teacher
+prompt.
+
+Clean benchmark:
+
+```text
+lessons-per-task: 6
+extra-write-variants: 14
+teacher/eval context: standard 6 lessons, context = 20/20
+write contexts: 20 total = 6 standard + 14 extra variants
+fixed eval: runs/strict_fixture_lyran_seed1_candidates80_eval20/eval_questions.jsonl
+layers: 4,8,12,16,20,24,27
+```
+
+Results:
+
+| Method | Edited | c2w | drop | max drop | Correct items |
+| --- | ---: | ---: | ---: | ---: | --- |
+| raw, scale `.02` | `5/20` | `2` | `2.240` | `11.132` | `3,4,5,16,17` |
+| raw, scale `.01` | `4/20` | `1` | `1.721` | `8.898` | `3,4,5,16` |
+| row `q75`, scale `.02` | `3/20` | `2` | `1.028` | `2.729` | `4,5,17` |
+| row `q90`, scale `.02` | `1/20` | `1` | `0.921` | `2.720` | `4` |
+| BPTC + row `q75`, scale `.01` | `2/20` | `2` | `0.776` | `1.802` | `2,16` |
+| BPTC + row `q90`, scale `.01` | `0/20` | `1` | `0.453` | `1.427` | none |
+| BPTC + row `q75`, scale `.005` | `0/20` | `1` | `0.351` | `0.887` | none |
+
+The BPTC/acquiring point recovered:
+
+```text
+2:  the big teacher saw the small cat.
+16: the small dog sees the big child.
+```
+
+Conclusion:
+
+- The teacher-valid benchmark removes the earlier context-teacher caveat and is
+  harder on safety.
+- Raw micro-capture still acquires, but it damages sentinels.
+- Row quantile filtering reduces max drop but does not eliminate c2w, and it
+  quickly deletes acquisition.
+- BPTC reduces margin damage and changes the acquired shard, but it is not a
+  clean separator. Its acquiring configuration still has `2` c2w; safer BPTC
+  configurations have no acquisition and still one c2w.
+
+Interpretation:
+
+BPTC v1 is a damage reducer, not the missing red/blue separator. The right next
+move is not more BPTC tuning. Keep the slow accumulation regime and replace the
+separator with a stronger contrastive/functional coordinate:
+
+- same-language versus same-format rival-language support in a maplet/function
+  coordinate, not raw entries;
+- or transported graph-value quotients that remove generic row-pattern x
+  downstream-posture effects while preserving object row-pattern effects.

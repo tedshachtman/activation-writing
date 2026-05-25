@@ -104,6 +104,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="When DICE diverse contexts are enabled, include the full normal lesson sequence as one positive support context.",
     )
+    parser.add_argument(
+        "--extra-write-variants",
+        type=int,
+        default=0,
+        help=(
+            "Append this many diverse final-lesson variants to the write-only lesson list "
+            "while leaving the teacher/eval context as the normal lesson sequence. This "
+            "tests many small write contexts without making one huge in-context teacher prompt."
+        ),
+    )
     parser.add_argument("--eval-questions", type=int, default=8)
     parser.add_argument(
         "--eval-questions-jsonl",
@@ -665,7 +675,19 @@ def main() -> None:
                 render_task_lesson(profile, lesson_idx, args.lesson_examples, args.seed)
                 for lesson_idx in range(args.lessons_per_task)
             ]
-        lesson_texts.append(task_lessons)
+        write_task_lessons = list(task_lessons)
+        if args.extra_write_variants > 0:
+            write_task_lessons.extend(
+                render_task_lesson_variant(
+                    profile,
+                    final_lesson_idx,
+                    args.lesson_examples,
+                    args.seed + 991_337,
+                    variant_idx,
+                )
+                for variant_idx in range(args.extra_write_variants)
+            )
+        lesson_texts.append(write_task_lessons)
         if args.dice_anti_contexts > 0:
             anti_profile = task_profile(profile.idx + args.dice_anti_profile_offset)
             dice_anti_lesson_texts.append(
@@ -694,6 +716,19 @@ def main() -> None:
                     "text": text,
                 },
             )
+        if args.extra_write_variants > 0:
+            start_idx = len(task_lessons)
+            for offset, text in enumerate(write_task_lessons[start_idx:]):
+                append_jsonl(
+                    lessons_path,
+                    {
+                        "task_idx": profile.idx,
+                        "language": profile.name,
+                        "lesson_idx": start_idx + offset,
+                        "render_mode": "extra_write_variant",
+                        "text": text,
+                    },
+                )
         for idx, text in enumerate(dice_anti_lesson_texts[-1]):
             append_jsonl(
                 lessons_path,
