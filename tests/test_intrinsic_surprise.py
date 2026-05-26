@@ -505,6 +505,39 @@ def test_global_coherence_relational_uses_current_context_residual():
     assert "global_coherence_support_gain_mean" in selection.diagnostics
 
 
+def test_global_coherence_relational_order3_requires_triangle_support():
+    layer = DummyLayer()
+    keys = torch.tensor(
+        [
+            [1.0, 2.0, 0.5, 0.0],
+            [2.0, 4.0, 0.5, 0.0],
+            [3.0, 6.0, 0.5, 0.0],
+            [4.0, 9.0, 5.0, 3.0],
+        ]
+    )
+    down = torch.eye(4)
+    selection = select_intrinsic_global_coherence_relational_write(
+        keys,
+        layer,
+        down,
+        token_mode="last",
+        feature_top_k=4,
+        key_feature_top_k=2,
+        value_feature_top_k=3,
+        pair_top_k=2,
+        relation_value_mode="context",
+        relation_context_target_mode="surprising_pairs_only",
+        context_rank=0,
+        position_rank=0,
+        relation_order=3,
+        triangle_top_k=2,
+    )
+    assert selection.diagnostics is not None
+    assert selection.diagnostics["relational_order"] == 3.0
+    assert selection.diagnostics["relational_triangle_kept"] > 0
+    assert torch.count_nonzero(selection.target_keys[0]).item() >= 2
+
+
 def test_gsci_transform_targets_absorbs_generic_row_value_field():
     keys = torch.eye(4)
     targets = torch.tensor(

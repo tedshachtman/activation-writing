@@ -8583,6 +8583,12 @@ def select_intrinsic_global_coherence_relational_write(
     coherence_ridge: float = 1e-3,
     support_power: float = 0.0,
     min_support_gain: float = 0.0,
+    relation_order: int = 2,
+    triangle_top_k: int = 4,
+    triangle_min_closure: float = 0.0,
+    triangle_min_gain: float = 0.0,
+    triangle_min_pair_ratio: float = 0.0,
+    triangle_power: float = 0.5,
     persistence_power: float = 0.0,
     persistence_threshold_fraction: float = 0.25,
     persistence_min_tokens: int = 2,
@@ -8636,6 +8642,8 @@ def select_intrinsic_global_coherence_relational_write(
         raise ValueError(f"Unknown relation_value_mode {relation_value_mode!r}")
     if relation_context_target_mode not in {"full", "surprising_pairs_only"}:
         raise ValueError(f"Unknown relation_context_target_mode {relation_context_target_mode!r}")
+    if int(relation_order) not in {2, 3}:
+        raise ValueError(f"relation_order must be 2 or 3, got {relation_order!r}")
 
     scale = mlp_weight_prior_scale(layer, keys_f.shape[1]).to(keys_f.device).clamp_min(1e-12)
     z_keys = score_keys_f / scale.unsqueeze(0)
@@ -8663,6 +8671,12 @@ def select_intrinsic_global_coherence_relational_write(
     local_ratio_values: list[float] = []
     support_gain_values: list[float] = []
     support_pass_count = 0
+    max_triangles = max(1, int(triangle_top_k))
+    triangle_closure_values: list[float] = []
+    triangle_gain_values: list[float] = []
+    triangle_pair_ratio_values: list[float] = []
+    triangle_raw_count = 0
+    triangle_kept_count = 0
     object_token_mask = torch.zeros(z_keys.shape[0], dtype=torch.bool)
     object_token_mask[token_indices.clamp(min=0, max=z_keys.shape[0] - 1)] = True
     object_token_count = int(object_token_mask.sum().item())
@@ -8675,55 +8689,115 @@ def select_intrinsic_global_coherence_relational_write(
         cause_features = candidates[:cause_k]
         value_features = candidates[: max(cause_k + 1, min(candidate_k, value_k + cause_k))]
 
-        pair_rows: list[tuple[float, int, int, float]] = []
+        pair_cache: dict[tuple[int, int], tuple[float, float, float]] = {}
+
+        def score_pair(left_idx: int, right_idx: int) -> tuple[float, float, float] | None:
+            if left_idx == right_idx:
+                return None
+            key = (left_idx, right_idx) if left_idx < right_idx else (right_idx, left_idx)
+            if key in pair_cache:
+                return pair_cache[key]
+            pattern = z_keys[:, left_idx] * z_keys[:, right_idx]
+            current_product = pattern[token_idx]
+            if float(current_product.abs().item()) <= 1e-12:
+                return None
+            nuisance = torch.cat(
+                [
+                    token_basis,
+                    z_keys[:, left_idx : left_idx + 1],
+                    z_keys[:, right_idx : right_idx + 1],
+                ],
+                dim=1,
+            )
+            system = nuisance.T @ nuisance + ridge * torch.eye(nuisance.shape[1], dtype=nuisance.dtype)
+            coeff = _solve_symmetric_psd(system, (nuisance.T @ pattern).unsqueeze(1)).squeeze(1)
+            residual = pattern - nuisance @ coeff
+            residual_energy = residual.square().mean().clamp_min(1e-6)
+            residual_energy_sum = residual.square().sum().clamp_min(1e-6)
+            if object_token_count > 0:
+                object_energy = residual[object_token_mask].square().sum()
+                support_fraction = object_energy / residual_energy_sum
+                support_gain = support_fraction / object_token_fraction
+            else:
+                support_gain = torch.tensor(1.0, dtype=torch.float32)
+            support_gain_values.append(float(support_gain.item()))
+            if float(min_support_gain) > 0.0 and float(support_gain.item()) < float(min_support_gain):
+                return None
+            local_residual = residual[token_idx]
+            if float(local_residual.abs().item()) <= 1e-12:
+                return None
+            feature_pair_score = torch.sqrt(
+                token_scores[left_idx].clamp_min(1e-12) * token_scores[right_idx].clamp_min(1e-12)
+            )
+            local_ratio = (local_residual.square() / residual_energy).clamp_min(0.0)
+            if float(support_power) > 0.0:
+                local_ratio = local_ratio * support_gain.clamp_min(1e-6).pow(float(support_power))
+            pair_score = local_ratio * feature_pair_score
+            if not torch.isfinite(pair_score):
+                return None
+            gain = (local_residual.abs() / current_product.abs().clamp_min(1e-6)).clamp(max=2.0)
+            result = (float(pair_score.item()), float(gain.item()), float(local_ratio.item()))
+            pair_cache[key] = result
+            return result
+
+        if int(relation_order) >= 3:
+            candidate_list = [int(idx) for idx in candidates.tolist()]
+            for left_pos, left_idx in enumerate(candidate_list):
+                for right_idx in candidate_list[left_pos + 1 :]:
+                    score_pair(left_idx, right_idx)
+
+        pair_rows: list[tuple[float, int, int, float, tuple[int, ...]]] = []
         for cause_idx in cause_features.tolist():
             for value_idx in value_features.tolist():
                 if value_idx == cause_idx:
                     continue
-                pattern = z_keys[:, cause_idx] * z_keys[:, value_idx]
-                current_product = pattern[token_idx]
-                if float(current_product.abs().item()) <= 1e-12:
-                    continue
-                nuisance = torch.cat(
-                    [
-                        token_basis,
-                        z_keys[:, cause_idx : cause_idx + 1],
-                        z_keys[:, value_idx : value_idx + 1],
-                    ],
-                    dim=1,
-                )
-                system = nuisance.T @ nuisance + ridge * torch.eye(nuisance.shape[1], dtype=nuisance.dtype)
-                coeff = _solve_symmetric_psd(system, (nuisance.T @ pattern).unsqueeze(1)).squeeze(1)
-                residual = pattern - nuisance @ coeff
-                residual_energy = residual.square().mean().clamp_min(1e-6)
-                residual_energy_sum = residual.square().sum().clamp_min(1e-6)
-                if object_token_count > 0:
-                    object_energy = residual[object_token_mask].square().sum()
-                    support_fraction = object_energy / residual_energy_sum
-                    support_gain = support_fraction / object_token_fraction
-                else:
-                    support_gain = torch.tensor(1.0, dtype=torch.float32)
-                support_gain_values.append(float(support_gain.item()))
-                if float(min_support_gain) > 0.0 and float(support_gain.item()) < float(min_support_gain):
+                pair = score_pair(int(cause_idx), int(value_idx))
+                if pair is None:
                     continue
                 support_pass_count += 1
-                local_residual = residual[token_idx]
-                if float(local_residual.abs().item()) <= 1e-12:
-                    continue
-                feature_pair_score = torch.sqrt(
-                    token_scores[cause_idx].clamp_min(1e-12)
-                    * token_scores[value_idx].clamp_min(1e-12)
-                )
-                local_ratio = (local_residual.square() / residual_energy).clamp_min(0.0)
-                if float(support_power) > 0.0:
-                    local_ratio = local_ratio * support_gain.clamp_min(1e-6).pow(float(support_power))
-                pair_score = local_ratio * feature_pair_score
-                if not torch.isfinite(pair_score):
-                    continue
-                gain = (local_residual.abs() / current_product.abs().clamp_min(1e-6)).clamp(max=2.0)
                 raw_pair_count += 1
-                local_ratio_values.append(float(local_ratio.item()))
-                pair_rows.append((float(pair_score.item()), cause_idx, value_idx, float(gain.item())))
+                pair_score_float, gain_float, local_ratio_float = pair
+                local_ratio_values.append(local_ratio_float)
+                support_features: tuple[int, ...] = ()
+                if int(relation_order) >= 3:
+                    triangle_raw_count += 1
+                    closure_rows: list[tuple[float, int]] = []
+                    for third_idx in candidates.tolist():
+                        third_idx = int(third_idx)
+                        if third_idx == int(cause_idx) or third_idx == int(value_idx):
+                            continue
+                        left = score_pair(int(cause_idx), third_idx)
+                        right = score_pair(int(value_idx), third_idx)
+                        if left is None or right is None:
+                            continue
+                        closure = (left[0] * right[0]) ** 0.5
+                        if float(closure) <= float(triangle_min_closure):
+                            continue
+                        closure_rows.append((float(closure), third_idx))
+                    if not closure_rows:
+                        continue
+                    closure_rows.sort(key=lambda item: item[0], reverse=True)
+                    closure_rows = closure_rows[:max_triangles]
+                    closure_values = torch.tensor([row[0] for row in closure_rows], dtype=torch.float32)
+                    closure_mean_tensor = closure_values.mean()
+                    closure_mean = float(closure_mean_tensor.item())
+                    pair_scores_for_token = torch.tensor([row[0] for row in pair_cache.values()], dtype=torch.float32)
+                    pair_median = pair_scores_for_token.median().clamp_min(1e-12)
+                    closure_gain_raw = closure_mean_tensor / pair_median
+                    closure_pair_ratio = closure_mean_tensor / max(float(pair_score_float), 1e-12)
+                    if float(closure_gain_raw.item()) < float(triangle_min_gain):
+                        continue
+                    if float(closure_pair_ratio.item()) < float(triangle_min_pair_ratio):
+                        continue
+                    closure_gain = closure_gain_raw.clamp_min(1e-12).pow(float(triangle_power))
+                    closure_gain = closure_gain.clamp(min=0.05, max=4.0)
+                    pair_score_float = float(pair_score_float * closure_gain.item())
+                    support_features = tuple(int(row[1]) for row in closure_rows)
+                    triangle_closure_values.append(closure_mean)
+                    triangle_gain_values.append(float(closure_gain.item()))
+                    triangle_pair_ratio_values.append(float(closure_pair_ratio.item()))
+                    triangle_kept_count += 1
+                pair_rows.append((float(pair_score_float), int(cause_idx), int(value_idx), float(gain_float), support_features))
 
         if not pair_rows:
             continue
@@ -8735,12 +8809,12 @@ def select_intrinsic_global_coherence_relational_write(
             if not pair_rows:
                 continue
         pair_rows.sort(key=lambda item: item[0], reverse=True)
-        grouped: dict[int, list[tuple[float, int, float]]] = {}
-        for pair_score_float, cause_idx, value_idx, gain_float in pair_rows[:max_pairs]:
+        grouped: dict[int, list[tuple[float, int, float, tuple[int, ...]]]] = {}
+        for pair_score_float, cause_idx, value_idx, gain_float, support_features in pair_rows[:max_pairs]:
             kept_pair_count += 1
-            grouped.setdefault(cause_idx, []).append((pair_score_float, value_idx, gain_float))
+            grouped.setdefault(cause_idx, []).append((pair_score_float, value_idx, gain_float, support_features))
             if bidirectional_pairs:
-                grouped.setdefault(value_idx, []).append((pair_score_float, cause_idx, gain_float))
+                grouped.setdefault(value_idx, []).append((pair_score_float, cause_idx, gain_float, support_features))
 
         for key_idx, values_for_key in grouped.items():
             key_activation = token_key[key_idx]
@@ -8751,7 +8825,14 @@ def select_intrinsic_global_coherence_relational_write(
             if relation_value_mode == "context":
                 if relation_context_target_mode == "surprising_pairs_only":
                     context_features = torch.tensor(
-                        sorted({target_idx for _score, target_idx, _gain in values_for_key if target_idx != key_idx}),
+                        sorted(
+                            {
+                                feature_idx
+                                for _score, target_idx, _gain, support_features in values_for_key
+                                for feature_idx in (target_idx, *support_features)
+                                if feature_idx != key_idx
+                            }
+                        ),
                         dtype=torch.long,
                     )
                 else:
@@ -8759,7 +8840,9 @@ def select_intrinsic_global_coherence_relational_write(
                 target_key[context_features] = token_key[context_features]
             else:
                 norm_weights = torch.sqrt(score_values / score_values.mean().clamp_min(1e-12)).clamp(max=4.0)
-                for norm_weight, (_pair_score, target_idx, gain_float) in zip(norm_weights, values_for_key, strict=False):
+                for norm_weight, (_pair_score, target_idx, gain_float, _support_features) in zip(
+                    norm_weights, values_for_key, strict=False
+                ):
                     value_gain = gain_float if relation_value_mode == "residual" else 1.0
                     target_activation = token_key[target_idx] * value_gain * float(norm_weight.item())
                     target_key[target_idx] += target_activation
@@ -8821,6 +8904,24 @@ def select_intrinsic_global_coherence_relational_write(
         target_keys=target_key_rows,
         feature_indices=feature_rows,
         diagnostics={
+            "relational_order": float(relation_order),
+            "relational_triangle_raw": float(triangle_raw_count),
+            "relational_triangle_kept": float(triangle_kept_count),
+            "relational_triangle_closure_mean": float(
+                sum(triangle_closure_values) / len(triangle_closure_values)
+            )
+            if triangle_closure_values
+            else 0.0,
+            "relational_triangle_gain_mean": float(sum(triangle_gain_values) / len(triangle_gain_values))
+            if triangle_gain_values
+            else 0.0,
+            "relational_triangle_pair_ratio_mean": float(
+                sum(triangle_pair_ratio_values) / len(triangle_pair_ratio_values)
+            )
+            if triangle_pair_ratio_values
+            else 0.0,
+            "relational_triangle_min_gain": float(triangle_min_gain),
+            "relational_triangle_min_pair_ratio": float(triangle_min_pair_ratio),
             "global_coherence_context_rank": float(context_rank),
             "global_coherence_position_rank": float(position_rank),
             "global_coherence_raw_pairs": float(raw_pair_count),

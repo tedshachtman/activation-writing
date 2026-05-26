@@ -9665,3 +9665,610 @@ Interpretation:
   red leakage.
 - Future separators should be judged against this all-layer baseline, not the
   old 7-layer micro baseline.
+
+## 2026-05-25: All-Layer Same-Context Coherence Separator
+
+After the methodology reset, I tested a single-forward-pass separator that does
+not use DICE, rival contexts, null/default prompts, probes, old keys, sentinels,
+or labels in the write.
+
+Method:
+
+```text
+target mode: global_coherence_relational
+carrier value: context
+context target: full
+token mode: final_aligned
+row quantile: q75
+context rank: 16
+position rank: 4
+support power: 1.0
+min support gain: 1.25
+layers: all 28 MLP layers
+```
+
+This differs from raw relational in the key way the user requested: pair
+surprise is not measured against prior token positions. A pair is scored by how
+much its same-context coactivation pattern remains unexplained after removing
+current-context nuisance modes: feature marginals, position/constant modes, and
+low-rank token modes from the current pass.
+
+Single-task all-layer results on the fixed strict Lyran fixture:
+
+| Method | Edited | c2w | before-correct drop | max drop | severe drops | Correct items |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| all-layer raw `.005` | `3/20` | `0` | `1.095` | `4.650` | `6` | `2,14,17` |
+| GCoherence q75 `.005` | `2/20` | `0` | `0.408` | `1.616` | `2` | `1,2` |
+| GCoherence q75 `.0075` | `4/20` | `0` | `0.606` | `1.839` | `6` | `1,2,14,17` |
+
+Runs:
+
+```text
+runs/alllayer_teacher6_extra14_raw_s005_cap075_eval20
+runs/alllayer_teacher6_extra14_gcoh_q75_s005_cap075_eval20
+runs/alllayer_teacher6_extra14_gcoh_q75_s0075_cap075_eval20
+```
+
+Interpretation:
+
+- Same-context coherence is a real separator improvement over raw at all layers.
+  At `.0075`, it beats raw `.005` on acquisition and on margin damage.
+- This is not just a small-update artifact: `.0075` recovers `4/20` while still
+  keeping c2w at `0` and max drop below `2`.
+- It still has severe margin movement, so it is a better separator, not a solved
+  safety mechanism.
+
+Two-task all-layer, no-sidecar results on the fixed strict Lyran/Vomar fixture:
+
+| Method | After task0 | After task1 task0 | After task1 task1 | c2w after task1 | drop after task1 | max drop after task1 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| GCoherence q75 `.0075` | Lyran `4/20` | Lyran `2/20` | Vomar `4/20` | `2` | `2.688` | `8.988` |
+| GCoherence q75 `.005` | Lyran `2/20` | Lyran `4/20` | Vomar `5/20` | `0` | `1.174` | `3.712` |
+
+Runs:
+
+```text
+runs/alllayer_twotask_gcoh_q75_s0075_cap075_eval20
+runs/alllayer_twotask_gcoh_q75_s005_cap075_eval20
+```
+
+Item profiles:
+
+```text
+.0075 after task0 Lyran: 1,2,14,17
+.0075 after task1 Lyran: 1,5
+.0075 after task1 Vomar: 3,8,15,16
+
+.005 after task0 Lyran: 1,2
+.005 after task1 Lyran: 1,2,4,14
+.005 after task1 Vomar: 3,8,15,16,19
+```
+
+Interpretation:
+
+- `.0075` is too hot sequentially: it learns both tasks but reopens sentinel c2w
+  and large margin damage after the second write.
+- `.005` is the current best all-layer no-sidecar accumulation point. It keeps
+  c2w at `0` after two tasks and gets nontrivial acquisition on both tasks.
+- The surprising Lyran improvement after the Vomar write means this method is
+  not simply preserving task0 by refusing task1. Vomar writes can push shared
+  language-learning structure that also helps Lyran.
+- It is still not safe enough by margin criteria. The next separator refinement
+  should target residual margin movement, especially high-leverage rows, while
+  preserving the same-context coherence tail.
+
+Next immediate experiment:
+
+```text
+GCoherence q75 + leverage-only BPTC brake
+```
+
+This keeps the same accepted coherence rows but suppresses rows that dominate
+the ridge solve. It is still single-pass and current-context-only; it uses no
+extra contexts or sidecar state.
+
+Follow-up all-layer separator runs:
+
+| Method | Fixture | Edited / retention | c2w | before-correct drop | max drop | severe drops | Correct items |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| GCoherence q75 + leverage-only `.0075` | Lyran single-task | `3/20` | `0` | `0.654` | `2.282` | `4` | `1,2,14` |
+| GCoherence q85 `.0075` | Lyran single-task | `3/20` | `0` | `0.531` | `1.847` | `4` | `1,2,14` |
+| GCoherence q85 `.0075` | two-task after task0 | Lyran `3/20` | `0` | `0.531` | `1.847` | `4` | `1,2,14` |
+| GCoherence q85 `.0075` | two-task after task1 | Lyran `2/20`, Vomar `4/20` | `1` | `1.697` | `4.646` | `8` | Lyran `1,4`; Vomar `3,8,15,16` |
+| GCoherence q90 `.0075` | two-task after task0 | Lyran `1/20` | `0` | `0.511` | `1.943` | `4` | `1` |
+| GCoherence q90 `.0075` | two-task after task1 | Lyran `4/20`, Vomar `5/20` | `0` | `1.186` | `3.415` | `6` | Lyran `1,2,4,14`; Vomar `3,8,15,16,19` |
+| GCoherence order-3 q85 `.0075` | two-task after task0 | Lyran `3/20` | `0` | `0.561` | `2.038` | `4` | `1,2,14` |
+| GCoherence order-3 q85 `.0075` | two-task after task1 | Lyran `3/20`, Vomar `5/20` | `1` | `1.673` | `4.599` | `8` | Lyran `1,2,4`; Vomar `3,8,15,16,19` |
+| GCoherence order-3 q85 `.0075`, filter-only motif target | after task0 only | Lyran `3/20` | `2` | `0.825` | `2.186` | `9` | not continued |
+
+Runs:
+
+```text
+runs/alllayer_teacher6_extra14_gcoh_q75_levonly_s0075_cap075_eval20
+runs/alllayer_teacher6_extra14_gcoh_q85_s0075_cap075_eval20
+runs/alllayer_twotask_gcoh_q85_s0075_cap075_eval20
+runs/alllayer_twotask_gcoh_q90_s0075_cap075_eval20
+runs/alllayer_twotask_gcoh_tri_q85_s0075_cap075_eval20
+runs/alllayer_twotask_gcoh_tri_filter_q85_s0075_cap075_eval20
+```
+
+Interpretation:
+
+- The leverage-only brake was not enough. It reduced acquisition/update mass,
+  but did not improve the margin profile enough to beat simply moving the
+  coherence threshold rightward.
+- Raising the threshold from q75 to q85 improved the single-task separator:
+  q85 `.0075` kept `3/20` with lower mean and max margin damage than the
+  leverage-only run.
+- Sequentially, q85 `.0075` was still too hot. It produced `1` c2w after the
+  Vomar write and worsened the margin tail, so q75 `.005` remains the current
+  best all-layer no-sidecar accumulation point.
+- q90 `.0075` moved the line too far right for the first write (`1/20`), but
+  after Vomar it reached the same final item set as q75 `.005` with `0` c2w and
+  a slightly lower max drop. This supports the slow-accumulation picture, but
+  does not improve the margin-drop frontier.
+- Order-3 q85 with triangle boosting preserved q85-like immediate acquisition
+  and improved Vomar to `5/20`, but it did not remove the second-write c2w or
+  margin tail. It appears to be structured amplification more than a stronger
+  separator.
+- Order-3 q85 with triangle as filter-only and motif-limited targets was worse:
+  it had `2` c2w after task0, so the run was stopped before Vomar. Restricting
+  the target to motif features did not separate blue from red; it likely removed
+  benign context while leaving high-leverage unsafe rows/layers.
+- Threshold-only separation appears insufficient: q85 gets more immediate blue
+  but c2w after task1, while q90 is safe but initially too sparse. The next
+  separator should make the accepted tail structurally cleaner, not simply
+  smaller.
+
+Implementation note:
+
+- Added `relation_order=3` support to `global_coherence_relational`. The higher
+  order motif is used only to index/select relation rows: a pair must be
+  supported by a closed same-context triangle before it is accepted or boosted.
+  Runtime addressing remains an ordinary MLP feature key, so the write remains
+  compatible with the existing model path and does not create a sidecar.
+- This ports the old triangle-index idea into the current-context coherence
+  selector, avoiding the old prior-token-history surprise coordinate.
+
+Next conclusion after triangle tests:
+
+- Higher-order same-context motifs are not the next clean separator in this
+  implementation. Boosting motifs preserves acquisition but keeps red leakage;
+  motif-limited targets can be unsafe immediately. The next failure object is
+  the layer/update tail: pairwise GCoherence has `0` c2w at q75 `.005` and q90
+  `.0075`, but both retain about `1.18` before-correct margin drop after two
+  tasks. Several triangle runs also showed isolated high update-norm layers.
+  The next move should be per-layer budget/trust on the pairwise GCoherence
+  frontier, not more motif indexing.
+
+Update-tail anatomy across the current all-layer two-task runs:
+
+| Run | Mean update Fro | Max | p95 | p99 | `> .25` | `> .35` | `> .50` |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| q75 `.005`, cap `.75` | `0.1905` | `0.7093` | `0.3521` | `0.5382` | `243` | `59` | `16` |
+| q90 `.0075`, cap `.75` | `0.1896` | `0.7500` | `0.3585` | `0.5481` | `233` | `63` | `16` |
+| q85 `.0075`, cap `.75` | `0.2294` | `0.7500` | `0.4356` | `0.6551` | `464` | `117` | `41` |
+| order-3 q85 `.0075`, cap `.75` | `0.2197` | `0.7500` | `0.4240` | `0.6691` | `399` | `99` | `40` |
+
+Layer 10 is the dominant spike layer in all these runs. In q75 `.005`, layer 10
+has max update Fro `0.7093` and mean `0.4971`; q90 `.0075` has max `0.7500` and
+mean `0.4954`. This explains why q75/q90 can have clean c2w but still similar
+margin damage: the threshold changed row selection, but not the high-norm layer
+tail.
+
+Next immediate experiment:
+
+```text
+GCoherence q90 .0075, all 28 layers, two-task no-sidecar,
+per-update max_update_norm .35
+```
+
+This clips only the tail above roughly the previous p95. The target is to keep
+the q90 final acquisition profile (`4/20` Lyran, `5/20` Vomar, `0` c2w) while
+reducing before-correct margin drop below the current `~1.18` plateau.
+
+Result:
+
+| Method | Stage | Edited | c2w | before-correct drop | max drop | severe drops |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| q90 `.0075`, max update `.35` | after task0 | Lyran `1/20` | `1` | `0.584` | `2.512` | `2` |
+
+Run:
+
+```text
+runs/alllayer_twotask_gcoh_q90_s0075_cap035_eval20
+```
+
+The run was stopped after task0 because it violated sentinel safety. The c2w
+was sentinel idx `2`, grammar, answer `Run`, which moved from margin `0.630` to
+`-0.320` and predicted `Marble`.
+
+Interpretation:
+
+- Simple hard clipping at `.35` is not a safe layer-tail brake. It clipped the
+  dominant layer-10 band from max `0.6835`/mean `0.4959` down to max `.35`/mean
+  `.3408`, but that changed the balance of the all-layer write enough to create
+  a c2w that the uncapped q90 run avoided.
+- Some high-norm layer updates are probably protective or compensatory, not only
+  red. The next cap test should be softer, trimming only the extreme tail:
+  q90 `.0075` with `max_update_norm .50`.
+
+Follow-up:
+
+| Method | Stage | Edited | c2w | before-correct drop | max drop | severe drops |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| q90 `.0075`, max update `.50` | after task0 | Lyran `1/20` | `1` | `0.639` | `2.393` | `6` |
+
+Run:
+
+```text
+runs/alllayer_twotask_gcoh_q90_s0075_cap050_eval20
+```
+
+The softer cap also violated task0 sentinel safety and was stopped. This
+falsifies simple per-update Frobenius clipping as the next separator. The
+uncapped q90 `.75` run was safer than both `.50` and `.35`, so the high-norm
+tail is not just red mass; some tail components appear to balance/protect the
+all-layer write.
+
+Next pivot:
+
+```text
+GCoherence q85 .0075 with stronger same-context support_gain threshold
+```
+
+Rather than clipping solved maps after the fact, tighten the object-support
+criterion before the solve. This keeps the all-layer balance intact for accepted
+rows, but moves the separator toward pairs whose residual energy is concentrated
+on the selected current-context object/use tokens rather than ambient context.
+
+Result:
+
+| Method | Stage | Edited | c2w | before-correct drop | max drop | severe drops |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| q85 `.0075`, `min_support_gain=2.0` | after task0 | Lyran `3/20` | `0` | `0.541` | `1.909` | `3` |
+| q85 `.0075`, `min_support_gain=2.0` | after task1 | Lyran `2/20`, Vomar `4/20` | `1` | `1.911` | `5.298` | `8` |
+
+Run:
+
+```text
+runs/alllayer_twotask_gcoh_q85_mingain2_s0075_cap075_eval20
+```
+
+Item profile:
+
+```text
+after task0 Lyran: 1,2,14
+after task1 Lyran: 1,4
+after task1 Vomar: 3,8,15,16
+```
+
+Interpretation:
+
+- A stronger same-context support threshold is not the missing separator. It
+  improves the task0 severe-drop count relative to q85 baseline (`3` instead of
+  `4`), but the second write still reopens sentinel c2w and produces a worse
+  margin tail.
+- This makes the current failure narrower: q85-like settings can capture a
+  useful first-write shard, but the second write still leaks red. Neither
+  triangle support, hard update caps, nor stricter support-gain filtering
+  separates the second-write red component.
+
+Follow-up brain-inspired allocator test:
+
+```text
+GCoherence q90 .0075 + BPTC row-weight capture
+all 28 layers, two-task fixture, no sidecar
+```
+
+Result:
+
+| Method | Stage | Edited | c2w | before-correct drop | max drop | severe drops |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| q90 `.0075` + BPTC | after task0 | Lyran `1/20` | `1` | `0.699` | `1.829` | `5` |
+
+Run:
+
+```text
+runs/alllayer_twotask_gcoh_q90_bptc_s0075_cap075_eval20
+```
+
+The run stopped after task0. The flipped sentinel was idx `2`, grammar, answer
+`Run`, predicted `Marble`, margin `0.630 -> -1.198`.
+
+Update anatomy versus uncapped q90:
+
+| Run | Mean update Fro | Max | p95 |
+| --- | ---: | ---: | ---: |
+| q90 `.0075` | `0.1896` | `0.7500` | `0.3585` |
+| q90 `.0075` + BPTC | `0.1792` | `0.6541` | `0.3336` |
+
+Interpretation:
+
+- The current BPTC implementation is not a better all-layer separator. It
+  lowers the update tail somewhat, but flips the same fragile grammar sentinel
+  that the simpler cap experiments exposed.
+- The precision gate is effectively normalized to mean `1`, while branch gates
+  can still amplify and leverage gates shrink. That is a plausible allocator,
+  but in this transformer coordinate it does not separate clean semantic
+  capture from grammar/posture damage.
+- The next direction should return to current-weight protected key geometry:
+  earlier all-layer sweeps showed broader input protection (`1024/40`) reduced
+  c2w under raw relational. The current GCoherence frontier has only been run
+  with `256/20`, so the next all-layer no-sidecar test should combine
+  GCoherence with the stronger current-weight key protection.
+
+Stronger current-weight input protection test:
+
+```text
+GCoherence q85 .0075, input protection 1024/40
+all 28 layers, two-task fixture, no sidecar
+```
+
+Result:
+
+| Method | Stage | Edited | c2w | before-correct drop | max drop | severe drops |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| q85 `.0075`, input `1024/40` | after task0 | Lyran `4/20` | `0` | `0.501` | `2.455` | `3` |
+| q85 `.0075`, input `1024/40` | after task1 | Lyran `1/20`, Vomar `5/20` | `0` | `1.661` | `4.730` | `7` |
+
+Run:
+
+```text
+runs/alllayer_twotask_gcoh_q85_in1024w40_s0075_cap075_eval20
+```
+
+Item profile:
+
+```text
+after task0 Lyran: 1,2,5,14
+after task1 Lyran: 4
+after task1 Vomar: 3,8,15,16,19
+```
+
+Update tail:
+
+| Run | Mean update Fro | Max | p95 | p99 |
+| --- | ---: | ---: | ---: | ---: |
+| q85 `.0075`, input `256/20` | `0.2294` | `0.7500` | `0.4356` | `0.6551` |
+| q85 `.0075`, input `1024/40` | `0.2225` | `0.7137` | `0.4171` | `0.5953` |
+
+Interpretation:
+
+- Broader current-weight key protection removed the q85 second-write c2w, so
+  it is a real safety lever, not just shrinkage.
+- It is not yet a frontier improvement. The second write overwrote/suppressed
+  Lyran retention (`4/20 -> 1/20`) and the margin tail remained worse than the
+  q75 `.005` and q90 `.0075` accumulation runs.
+- The next useful test is the conservative frontier setting with the same
+  stronger protection: q75 `.005`, input `1024/40`. That asks whether broader
+  key protection can lower margin damage at the already-safe slow accumulation
+  point without triggering the q85 retention collapse.
+
+Conservative stronger-protection test:
+
+```text
+GCoherence q75 .005, input protection 1024/40
+all 28 layers, two-task fixture, no sidecar
+```
+
+Result:
+
+| Method | Stage | Edited | c2w | before-correct drop | max drop | severe drops |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| q75 `.005`, input `1024/40` | after task0 | Lyran `1/20` | `0` | `0.352` | `1.923` | `2` |
+| q75 `.005`, input `1024/40` | after task1 | Lyran `4/20`, Vomar `5/20` | `0` | `1.213` | `3.789` | `6` |
+
+Run:
+
+```text
+runs/alllayer_twotask_gcoh_q75_in1024w40_s005_cap075_eval20
+```
+
+Item profile:
+
+```text
+after task0 Lyran: 1
+after task1 Lyran: 1,2,14,17
+after task1 Vomar: 3,8,15,16,19
+```
+
+Update tail:
+
+| Run | Mean update Fro | Max | p95 | p99 |
+| --- | ---: | ---: | ---: | ---: |
+| q75 `.005`, input `256/20` | `0.1905` | `0.7093` | `0.3521` | `0.5382` |
+| q75 `.005`, input `1024/40` | `0.1861` | `0.6379` | `0.3415` | `0.4994` |
+
+Interpretation:
+
+- This reproduces the final safe accumulation item profile, but does not improve
+  the final margin frontier. It has the same final `4/20 + 5/20`, `0` c2w
+  profile as q75 `.005`, with slightly worse final drop (`1.213` versus
+  `1.174`) and max drop (`3.789` versus `3.712`).
+- The stronger key protection does reduce the update tail and improves the
+  task0 drop (`0.352` versus `0.408`), but the second write still creates the
+  same broad margin movement.
+- Current conclusion: protected key breadth is a real safety lever, but by
+  itself it is not the missing red/blue separator. The best live frontier
+  remains pairwise GCoherence q75 `.005` or q90 `.0075` with input `256/20`.
+
+Usage-weighted input protection test:
+
+```text
+GCoherence q75 .005, input protection 1024/40, usage_power=1.0
+all 28 layers, two-task fixture, no sidecar
+```
+
+Result:
+
+| Method | Stage | Edited | c2w | before-correct drop | max drop | severe drops |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| q75 `.005`, input `1024/40`, usage `1` | after task0 | Lyran `1/20` | `0` | `0.365` | `1.615` | `2` |
+| q75 `.005`, input `1024/40`, usage `1` | after task1 | Lyran `3/20`, Vomar `5/20` | `0` | `1.170` | `3.956` | `6` |
+
+Run:
+
+```text
+runs/alllayer_twotask_gcoh_q75_in1024w40_usage1_s005_cap075_eval20
+```
+
+Item profile:
+
+```text
+after task0 Lyran: 1
+after task1 Lyran: 1,4,14
+after task1 Vomar: 3,8,15,16,19
+```
+
+Update tail:
+
+| Run | Mean update Fro | Max | p95 | p99 |
+| --- | ---: | ---: | ---: | ---: |
+| q75 `.005`, input `256/20` | `0.1905` | `0.7093` | `0.3521` | `0.5382` |
+| q75 `.005`, input `1024/40`, usage `1` | `0.1926` | `0.7086` | `0.3655` | `0.5583` |
+
+Interpretation:
+
+- Usage-weighted protection is not an improvement. It keeps c2w clean and
+  matches the frontier-level mean drop, but loses one Lyran item and has a
+  worse max-drop tail.
+- Protecting cold/high-weight columns rather than active lesson columns does
+  not separate the red component. The remaining margin damage is likely not a
+  simple protected-column coverage issue.
+- The input-protection family has now shown a consistent profile: it can change
+  flips and tails, but it does not improve the Pareto frontier over q75/q90
+  pairwise GCoherence.
+
+Higher-rank current-context nuisance test:
+
+```text
+GCoherence q75 .005, context_rank=32, position_rank=8
+all 28 layers, two-task fixture, no sidecar
+```
+
+Result:
+
+| Method | Stage | Edited | c2w | before-correct drop | max drop | severe drops |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| q75 `.005`, ctx `32`, pos `8` | after task0 | Lyran `1/20` | `0` | `0.342` | `1.763` | `1` |
+| q75 `.005`, ctx `32`, pos `8` | after task1 | Lyran `5/20`, Vomar `4/20` | `0` | `1.281` | `3.736` | `6` |
+
+Run:
+
+```text
+runs/alllayer_twotask_gcoh_q75_ctx32pos8_s005_cap075_eval20
+```
+
+Item profile:
+
+```text
+after task0 Lyran: 1
+after task1 Lyran: 1,2,4,14,17
+after task1 Vomar: 3,8,15,16
+```
+
+Update/score diagnostics:
+
+| Run | Mean update Fro | Max | p95 | mean support gain | mean local ratio | mean target Fro |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| q75 `.005`, ctx `16`, pos `4` | `0.1905` | `0.7093` | `0.3521` | `5.314` | `287.111` | `6.137` |
+| q75 `.005`, ctx `32`, pos `8` | `0.1891` | `0.6924` | `0.3318` | `4.767` | `256.523` | `6.017` |
+
+Interpretation:
+
+- Increasing the current-context nuisance rank makes the selector stricter in
+  the intended way: lower support/local-ratio scores, lower p95 update Fro, and
+  cleaner task0 sentinel margin.
+- It is not a safety-frontier improvement. It moves more Lyran blue after the
+  Vomar write (`5/20`, the best all-layer retained Lyran count so far), but the
+  final margin drop is worse than the q75/q90 frontier.
+- This suggests the richer nuisance basis is separating a useful shared
+  language-learning component, but that component is still coupled to broad
+  sentinel margin drift at the current scale.
+
+Lower-scale follow-up:
+
+```text
+GCoherence q75 .004, context_rank=32, position_rank=8
+all 28 layers, two-task fixture, no sidecar
+```
+
+Result:
+
+| Method | Stage | Edited | c2w | before-correct drop | max drop | severe drops |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| q75 `.004`, ctx `32`, pos `8` | after task0 | Lyran `1/20` | `0` | `0.286` | `1.722` | `1` |
+| q75 `.004`, ctx `32`, pos `8` | after task1 | Lyran `3/20`, Vomar `1/20` | `0` | `0.859` | `2.739` | `4` |
+
+Run:
+
+```text
+runs/alllayer_twotask_gcoh_q75_ctx32pos8_s004_cap075_eval20
+```
+
+Item profile:
+
+```text
+after task0 Lyran: 1
+after task1 Lyran: 1,2,14
+after task1 Vomar: 19
+```
+
+Update tail:
+
+| Run | Mean update Fro | Max | p95 | p99 |
+| --- | ---: | ---: | ---: | ---: |
+| q75 `.005`, ctx `32`, pos `8` | `0.1891` | `0.6924` | `0.3318` | `0.5465` |
+| q75 `.004`, ctx `32`, pos `8` | `0.1506` | `0.5525` | `0.2639` | `0.4243` |
+
+Interpretation:
+
+- This is the expected slow-write tradeoff: margin damage improves materially
+  (`1.281 -> 0.859`) and c2w stays clean, but task1 acquisition mostly
+  collapses (`4/20 -> 1/20` Vomar).
+- The high-rank nuisance separator has a plausible Pareto curve, but `.004` is
+  too conservative for the current two-task acquisition target.
+- If exploring this exact axis further, the next value would be `.0045`.
+  However, this is now scale tuning around a still-imperfect separator, not a
+  qualitatively new safety coordinate.
+
+High-threshold lower-scale check:
+
+```text
+GCoherence q90 .005, context_rank=16, position_rank=4
+all 28 layers, two-task fixture, no sidecar
+```
+
+Result:
+
+| Method | Stage | Edited | c2w | before-correct drop | max drop | severe drops |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| q90 `.005` | after task0 | Lyran `1/20` | `1` | `0.485` | `2.102` | `2` |
+
+Run:
+
+```text
+runs/alllayer_twotask_gcoh_q90_s005_cap075_eval20
+```
+
+The run stopped after task0. The flipped sentinel was idx `2`, grammar, answer
+`Run`, predicted `Marble`, margin `0.630 -> -0.788`.
+
+Update tail:
+
+| Run | Mean update Fro | Max | p95 | p99 |
+| --- | ---: | ---: | ---: | ---: |
+| q90 `.005` | `0.1225` | `0.4521` | `0.2172` | `0.3354` |
+| q90 `.0075` | `0.1896` | `0.7500` | `0.3585` | `0.5481` |
+
+Interpretation:
+
+- Higher threshold plus lower scale is not monotonically safer. q90 `.005`
+  flips the same fragile grammar sentinel even though its update tail is much
+  smaller than q90 `.0075`, which was c2w-clean after task0.
+- This reinforces the earlier cap result: all-layer safety is not simply a norm
+  or scale issue. Some higher-norm components appear to balance later-layer
+  effects, and removing them can expose a specific grammar/readout failure.
+- The useful next separator probably needs a layer-interaction or downstream
+  balance criterion, not another scalar threshold/scale/cap sweep.
