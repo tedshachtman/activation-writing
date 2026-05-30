@@ -97,13 +97,23 @@ def configure_raw_args(
     args.intrinsic_surprise_exp_cap = script_args.exp_cap
     args.intrinsic_surprise_pair_quantile = script_args.pair_quantile
     args.intrinsic_surprise_row_quantile = script_args.row_quantile
-    args.intrinsic_target_purifier = "none"
+    args.intrinsic_target_purifier = script_args.purifier
     args.intrinsic_surprise_output_penalty_rank = script_args.output_penalty_rank
     args.intrinsic_surprise_output_penalty_weight = script_args.output_penalty_weight
     args.intrinsic_surprise_input_penalty_features = script_args.input_penalty_features
     args.intrinsic_surprise_input_penalty_weight = script_args.input_penalty_weight
     args.intrinsic_surprise_input_penalty_usage_power = script_args.input_penalty_usage_power
     args.intrinsic_surprise_input_penalty_mode = script_args.input_penalty_mode
+    args.fanout_max_rows = script_args.fanout_max_rows
+    args.fanout_graph_top_k = script_args.fanout_graph_top_k
+    args.fanout_gate_temperature = script_args.fanout_gate_temperature
+    args.fanout_gate_floor = script_args.fanout_gate_floor
+    args.fanout_gate_cap = script_args.fanout_gate_cap
+    args.fanout_specificity_power = script_args.fanout_specificity_power
+    args.fanout_address_power = script_args.fanout_address_power
+    args.fanout_posture_weight = script_args.fanout_posture_weight
+    args.fanout_no_preserve_weight_mean = script_args.fanout_no_preserve_weight_mean
+    args.fanout_shuffle_graph = script_args.fanout_shuffle_graph
     args.ridge = script_args.ridge
     args.eta = script_args.eta
     args.max_update_norm = script_args.max_update_norm
@@ -131,6 +141,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pair-top-k", type=int, default=16)
     parser.add_argument("--relation-order", type=int, choices=[2, 3], default=2)
     parser.add_argument("--relation-value-mode", choices=["residual", "full", "context"], default="context")
+    parser.add_argument("--purifier", choices=["none", "fanout"], default="none")
     parser.add_argument("--weight-mode", choices=["linear", "exponential"], default="linear")
     parser.add_argument("--exp-temperature", type=float, default=1.0)
     parser.add_argument("--exp-cap", type=float, default=100.0)
@@ -142,6 +153,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input-penalty-weight", type=float, default=20.0)
     parser.add_argument("--input-penalty-usage-power", type=float, default=0.0)
     parser.add_argument("--input-penalty-mode", choices=["onehot", "svd", "hybrid"], default="onehot")
+    parser.add_argument("--fanout-max-rows", type=int, default=512)
+    parser.add_argument("--fanout-graph-top-k", type=int, default=12)
+    parser.add_argument("--fanout-gate-temperature", type=float, default=0.5)
+    parser.add_argument("--fanout-gate-floor", type=float, default=0.02)
+    parser.add_argument("--fanout-gate-cap", type=float, default=20.0)
+    parser.add_argument("--fanout-specificity-power", type=float, default=1.0)
+    parser.add_argument("--fanout-address-power", type=float, default=0.5)
+    parser.add_argument("--fanout-posture-weight", type=float, default=0.5)
+    parser.add_argument("--fanout-no-preserve-weight-mean", action="store_true")
+    parser.add_argument("--fanout-shuffle-graph", action="store_true")
     parser.add_argument("--ridge", type=float, default=1.0)
     parser.add_argument("--eta", type=float, default=1.0)
     parser.add_argument("--max-update-norm", type=float, default=50.0)
@@ -253,6 +274,16 @@ def main() -> None:
             "output_penalty_weight": args.output_penalty_weight,
             "input_penalty_features": args.input_penalty_features,
             "input_penalty_weight": args.input_penalty_weight,
+            "purifier": args.purifier,
+            "fanout_max_rows": args.fanout_max_rows,
+            "fanout_graph_top_k": args.fanout_graph_top_k,
+            "fanout_gate_temperature": args.fanout_gate_temperature,
+            "fanout_gate_floor": args.fanout_gate_floor,
+            "fanout_gate_cap": args.fanout_gate_cap,
+            "fanout_specificity_power": args.fanout_specificity_power,
+            "fanout_address_power": args.fanout_address_power,
+            "fanout_posture_weight": args.fanout_posture_weight,
+            "fanout_preserve_weight_mean": not args.fanout_no_preserve_weight_mean,
             "weight_mode": args.weight_mode,
             "pair_quantile": args.pair_quantile,
             "row_quantile": args.row_quantile,

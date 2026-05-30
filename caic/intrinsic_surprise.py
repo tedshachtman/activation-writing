@@ -248,6 +248,20 @@ class BptcTransformResult:
 
 
 @dataclass
+class FanoutTransformResult:
+    """Explanatory fan-out row-weight transform.
+
+    The transform keeps the rich relational/context-value target intact and
+    only changes row allocation. Rows are trusted when their target explains
+    nearby same-context targets more than generic/far targets.
+    """
+
+    weights: torch.Tensor
+    gates: torch.Tensor
+    diagnostics: dict[str, float]
+
+
+@dataclass
 class TgvqPurificationResult:
     """TGVQ post-solve transported graph-value quotient update."""
 
@@ -4806,6 +4820,207 @@ def bptc_transform_weights(
         "bptc_shuffle_graph": 1.0 if shuffle_graph else 0.0,
     }
     return BptcTransformResult(
+        weights=torch.nan_to_num(w_new, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0).contiguous(),
+        gates=gates.contiguous(),
+        diagnostics=diagnostics,
+    )
+
+
+def fanout_transform_weights(
+    *,
+    keys: torch.Tensor,
+    targets: torch.Tensor,
+    weights: torch.Tensor,
+    all_outputs: torch.Tensor,
+    token_indices: torch.Tensor,
+    max_rows: int = 512,
+    graph_top_k: int = 12,
+    gate_temperature: float = 0.5,
+    gate_floor: float = 0.02,
+    gate_cap: float = 20.0,
+    specificity_power: float = 1.0,
+    address_power: float = 0.5,
+    posture_weight: float = 0.5,
+    preserve_weight_mean: bool = True,
+    shuffle_graph: bool = False,
+    eps: float = 1e-6,
+) -> FanoutTransformResult:
+    """Gate raw relational rows by explanatory fan-out.
+
+    This is a first transformer-native proxy for "minimal latent patch." A row
+    is useful when its target direction explains many nearby context targets,
+    while not explaining unrelated/far rows equally well. Generic posture rows
+    tend to have high global explanation and low local/global specificity.
+    """
+
+    k = torch.nan_to_num(keys.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    y = torch.nan_to_num(targets.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    w = torch.nan_to_num(weights.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+    all_h = torch.nan_to_num(all_outputs.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0)
+    tok = token_indices.detach().cpu().long()
+    if k.ndim != 2 or y.ndim != 2 or k.shape[0] != y.shape[0]:
+        raise ValueError("fanout keys and targets must be [n,*] with matching rows")
+    n_rows, d_model = y.shape
+    if n_rows == 0:
+        return FanoutTransformResult(w, torch.empty(0, dtype=torch.float32), {"fanout_enabled": 1.0})
+    if w.ndim != 1 or w.shape[0] != n_rows:
+        raise ValueError("fanout weights must align with selected rows")
+    if all_h.ndim == 2 and all_h.shape[1] == d_model and tok.numel() >= n_rows:
+        safe_tok = tok[:n_rows].clamp(min=0, max=max(all_h.shape[0] - 1, 0))
+        h = all_h.index_select(0, safe_tok)
+    else:
+        h = y
+        safe_tok = tok[:n_rows] if tok.numel() >= n_rows else torch.arange(n_rows)
+
+    diagnostics: dict[str, float] = {
+        "fanout_enabled": 1.0,
+        "fanout_rows": float(n_rows),
+        "fanout_max_rows": float(max(0, int(max_rows))),
+        "fanout_graph_top_k": float(max(0, int(graph_top_k))),
+    }
+    if n_rows < 3:
+        gates = torch.ones(n_rows, dtype=torch.float32)
+        diagnostics["fanout_fallback"] = 1.0
+        return FanoutTransformResult(w.contiguous(), gates, diagnostics)
+    if int(max_rows) > 0 and n_rows > int(max_rows):
+        keep_count = max(3, min(int(max_rows), n_rows))
+        salience = w * torch.linalg.vector_norm(y, dim=1).clamp_min(float(eps))
+        keep_idx = torch.topk(salience, k=keep_count, largest=True).indices.sort().values
+        sub = fanout_transform_weights(
+            keys=k.index_select(0, keep_idx),
+            targets=y.index_select(0, keep_idx),
+            weights=w.index_select(0, keep_idx),
+            all_outputs=all_h,
+            token_indices=tok.index_select(0, keep_idx) if tok.numel() >= n_rows else keep_idx,
+            max_rows=0,
+            graph_top_k=graph_top_k,
+            gate_temperature=gate_temperature,
+            gate_floor=gate_floor,
+            gate_cap=gate_cap,
+            specificity_power=specificity_power,
+            address_power=address_power,
+            posture_weight=posture_weight,
+            preserve_weight_mean=False,
+            shuffle_graph=shuffle_graph,
+            eps=eps,
+        )
+        gates = torch.full((n_rows,), max(float(gate_floor), 0.0), dtype=torch.float32)
+        gates.index_copy_(0, keep_idx, sub.gates)
+        w_new = w * gates
+        before_mean = w.mean().clamp_min(float(eps))
+        if preserve_weight_mean and float(w_new.mean().item()) > 0.0:
+            w_new = w_new * (before_mean / w_new.mean().clamp_min(float(eps)))
+        diagnostics.update(sub.diagnostics)
+        diagnostics.update(
+            {
+                "fanout_rows": float(n_rows),
+                "fanout_scored_rows": float(keep_count),
+                "fanout_capped_rows": float(n_rows - keep_count),
+                "fanout_gate_mean": float(gates.mean().item()),
+                "fanout_gate_min": float(gates.min().item()),
+                "fanout_gate_max": float(gates.max().item()),
+                "fanout_weight_mean_before": float(before_mean.item()),
+                "fanout_weight_mean_after": float(w_new.mean().item()),
+                "fanout_preserve_weight_mean": 1.0 if preserve_weight_mean else 0.0,
+            }
+        )
+        return FanoutTransformResult(
+            weights=torch.nan_to_num(w_new, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0).contiguous(),
+            gates=gates.contiguous(),
+            diagnostics=diagnostics,
+        )
+
+    node = torch.cat([F.normalize(k, dim=1), F.normalize(y, dim=1), F.normalize(h, dim=1)], dim=1)
+    sim = torch.nan_to_num(node @ node.T, nan=0.0, posinf=0.0, neginf=0.0)
+    if tok.numel() >= n_rows:
+        pos = safe_tok[:n_rows].float()
+        sim = sim - 0.02 * torch.log1p((pos[:, None] - pos[None, :]).abs())
+    sim.fill_diagonal_(-1e9)
+    keep = max(1, min(int(graph_top_k), n_rows - 1))
+    vals, idx = torch.topk(sim, k=keep, dim=1)
+    p_vals = torch.softmax(vals - vals.max(dim=1, keepdim=True).values, dim=1)
+    graph = torch.zeros(n_rows, n_rows, dtype=torch.float32)
+    graph.scatter_(1, idx, p_vals)
+    if shuffle_graph and n_rows > 2:
+        graph = torch.roll(graph, shifts=1, dims=1)
+        graph.fill_diagonal_(0.0)
+    graph = graph / graph.sum(dim=1, keepdim=True).clamp_min(float(eps))
+    local_mask = torch.zeros(n_rows, n_rows, dtype=torch.bool)
+    local_mask.scatter_(1, idx, True)
+    local_mask.fill_diagonal_(False)
+    far_mask = ~local_mask
+    far_mask.fill_diagonal_(False)
+    far = far_mask.float()
+    far = far / far.sum(dim=1, keepdim=True).clamp_min(1.0)
+
+    y_norm2 = torch.linalg.vector_norm(y, dim=1).square().clamp_min(float(eps))
+    y_unit = y / y_norm2.sqrt().unsqueeze(1)
+    explain = (y_unit @ y.T).square() / y_norm2.unsqueeze(0)
+    explain = torch.nan_to_num(explain, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+    explain.fill_diagonal_(0.0)
+    local_explain = (graph * explain).sum(dim=1)
+    global_explain = (far * explain).sum(dim=1)
+    effective_neighbors = 1.0 / graph.square().sum(dim=1).clamp_min(float(eps))
+    specificity = (local_explain + float(eps)) / (global_explain + float(eps))
+
+    k_norm2 = torch.linalg.vector_norm(k, dim=1).square().clamp_min(float(eps))
+    k_unit = k / k_norm2.sqrt().unsqueeze(1)
+    key_explain = (k_unit @ k.T).square() / k_norm2.unsqueeze(0)
+    key_explain = torch.nan_to_num(key_explain, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+    key_explain.fill_diagonal_(0.0)
+    local_key = (graph * key_explain).sum(dim=1)
+    global_key = (far * key_explain).sum(dim=1)
+    address_specificity = (local_key + float(eps)) / (global_key + float(eps))
+
+    global_mean = (w / w.sum().clamp_min(float(eps))).unsqueeze(0) @ y
+    global_mean = global_mean.squeeze(0)
+    global_mean_norm2 = torch.linalg.vector_norm(global_mean).square().clamp_min(float(eps))
+    posture = (y @ global_mean).square() / (y_norm2 * global_mean_norm2)
+    posture = torch.nan_to_num(posture, nan=0.0, posinf=0.0, neginf=0.0).clamp(min=0.0, max=1.0)
+
+    fanout_mass = local_explain * torch.log1p(effective_neighbors)
+    score = fanout_mass
+    score = score * specificity.clamp_min(float(eps)).pow(float(specificity_power))
+    score = score * address_specificity.clamp_min(float(eps)).pow(float(address_power))
+    if float(posture_weight) > 0.0:
+        score = score / (1.0 + float(posture_weight) * posture)
+    score = torch.nan_to_num(score, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(float(eps))
+
+    gates = _robust_exp_gate(
+        score,
+        temperature=max(float(gate_temperature), float(eps)),
+        cap=gate_cap,
+        floor=gate_floor,
+        eps=eps,
+    )
+    w_new = w * gates
+    before_mean = w.mean().clamp_min(float(eps))
+    if preserve_weight_mean and float(w_new.mean().item()) > 0.0:
+        w_new = w_new * (before_mean / w_new.mean().clamp_min(float(eps)))
+
+    diagnostics.update(
+        {
+            "fanout_fallback": 0.0,
+            "fanout_gate_mean": float(gates.mean().item()),
+            "fanout_gate_min": float(gates.min().item()),
+            "fanout_gate_max": float(gates.max().item()),
+            "fanout_score_mean": float(score.mean().item()),
+            "fanout_score_p90": float(torch.quantile(score, 0.9).item()),
+            "fanout_score_max": float(score.max().item()),
+            "fanout_local_explain_mean": float(local_explain.mean().item()),
+            "fanout_global_explain_mean": float(global_explain.mean().item()),
+            "fanout_specificity_mean": float(specificity.mean().item()),
+            "fanout_specificity_p90": float(torch.quantile(specificity, 0.9).item()),
+            "fanout_address_specificity_mean": float(address_specificity.mean().item()),
+            "fanout_effective_neighbors_mean": float(effective_neighbors.mean().item()),
+            "fanout_posture_mean": float(posture.mean().item()),
+            "fanout_preserve_weight_mean": 1.0 if preserve_weight_mean else 0.0,
+            "fanout_weight_mean_before": float(before_mean.item()),
+            "fanout_weight_mean_after": float(w_new.mean().item()),
+            "fanout_shuffle_graph": 1.0 if shuffle_graph else 0.0,
+        }
+    )
+    return FanoutTransformResult(
         weights=torch.nan_to_num(w_new, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0).contiguous(),
         gates=gates.contiguous(),
         diagnostics=diagnostics,

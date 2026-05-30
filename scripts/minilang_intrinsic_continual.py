@@ -304,6 +304,7 @@ def parse_args() -> argparse.Namespace:
             "wm_coherence",
             "gsci",
             "bptc",
+            "fanout",
             "tgvq",
             "tag_ce",
             "cage_ce",
@@ -350,6 +351,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bptc-disable-precision", action="store_true")
     parser.add_argument("--bptc-disable-capture", action="store_true")
     parser.add_argument("--bptc-shuffle-graph", action="store_true")
+    parser.add_argument("--fanout-max-rows", type=int, default=512)
+    parser.add_argument("--fanout-graph-top-k", type=int, default=12)
+    parser.add_argument("--fanout-gate-temperature", type=float, default=0.5)
+    parser.add_argument("--fanout-gate-floor", type=float, default=0.02)
+    parser.add_argument("--fanout-gate-cap", type=float, default=20.0)
+    parser.add_argument("--fanout-specificity-power", type=float, default=1.0)
+    parser.add_argument("--fanout-address-power", type=float, default=0.5)
+    parser.add_argument("--fanout-posture-weight", type=float, default=0.5)
+    parser.add_argument("--fanout-no-preserve-weight-mean", action="store_true")
+    parser.add_argument("--fanout-shuffle-graph", action="store_true")
     parser.add_argument("--tgvq-observer-rank", type=int, default=64)
     parser.add_argument("--tgvq-object-row-rank", type=int, default=16)
     parser.add_argument("--tgvq-ghost-row-rank", type=int, default=12)

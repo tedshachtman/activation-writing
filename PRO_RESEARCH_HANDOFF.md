@@ -4135,3 +4135,73 @@ Next best target:
 Build a less sparse contrastive separator over **functional maplets**: small
 role/key neighborhoods mapped to effect neighborhoods, supported across
 same-language contexts and suppressed by same-format rival-language contexts.
+
+## Postscript 30: Explanatory Fan-Out Gate v1
+
+Implemented the first direct test of the user's "minimal latent patch /
+explanatory fan-out" hypothesis:
+
+```text
+--intrinsic-target-purifier fanout
+```
+
+This is intentionally a row allocator, not a new target. It keeps the raw
+relational/context-value carrier and scores selected rows by whether a row's
+target explains nearby same-context targets more than generic/far targets. The
+score combines:
+
+```text
+local target fan-out
+* local-vs-global target specificity
+* local-vs-global key/address specificity
+* generic target-centroid posture penalty
+```
+
+Rows are then gated with a robust exponential gate before the existing protected
+ridge solve. No extra prompts, labels, probes, sentinels, old keys, or sidecar
+state are used. For all-token mode I added a `--fanout-max-rows` cap because the
+naive all-row pairwise fan-out graph was too slow on the Qwen3.5 0.8B benchmark.
+
+Benchmark:
+
+```text
+benchmarks/context_learning_v1_qwen35_0_8b
+model: Qwen/Qwen3.5-0.8B-Base
+baseline: 0/80
+full-context teacher: 80/80
+sentinel baseline: 20/25
+all layers: 24
+```
+
+Final-aligned results:
+
+| Method | Edited | c2w | mean drop | worst max drop | severe drops |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| raw `.075` final-aligned | `2/80` | `0` | `0.318` | `2.375` | `16` |
+| fanout `.075` final-aligned | `2/80` | `0` | `0.214` | `1.438` | `4` |
+| raw `.10` final-aligned | `3/80` | `0` | `0.442` | `2.875` | `39` |
+| fanout `.10` final-aligned | `2/80` | `0` | `0.293` | `2.125` | `14` |
+
+All-token reference:
+
+| Method | Edited | c2w | mean drop | worst max drop |
+| --- | ---: | ---: | ---: | ---: |
+| raw `.10` all-token | `4/80` | `4` | `0.449` | `4.500` |
+
+Interpretation:
+
+- Fanout v1 is a real collateral reducer at fixed final-aligned scale.
+- It is not yet an acquisition improver. It keeps the same two stable items as
+  raw final-aligned: profile workspace and a game-piece movement rule.
+- At `.10`, raw final-aligned gets one extra taxonomy item, but with much worse
+  sentinel margin damage. Fanout drops that item while reducing damage.
+- The current implementation therefore behaves like a better conservative
+  separator, not the full "minimal latent patch" solver.
+
+Conclusion:
+
+The fan-out hypothesis is not falsified, but v1 is only a local row-gate proxy.
+The next stronger version should stop scoring individual rows and instead solve
+for small latent maplets whose application improves many same-context conditional
+relations. In other words: explanatory fan-out should become a compact basis /
+patch selection problem, not just another multiplicative row weight.

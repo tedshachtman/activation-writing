@@ -29,6 +29,7 @@ from caic.intrinsic_surprise import (
     down_output_basis_specificity,
     down_value_specificity,
     effective_down_weight,
+    fanout_transform_weights,
     gauge_canonical_key_scale,
     gsci_design_solve_update,
     gsci_transform_targets,
@@ -2994,6 +2995,7 @@ def parse_args() -> argparse.Namespace:
             "wm_coherence",
             "gsci",
             "bptc",
+            "fanout",
             "tgvq",
             "tag_ce",
             "cage_ce",
@@ -3040,6 +3042,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bptc-disable-precision", action="store_true")
     parser.add_argument("--bptc-disable-capture", action="store_true")
     parser.add_argument("--bptc-shuffle-graph", action="store_true")
+    parser.add_argument("--fanout-max-rows", type=int, default=512)
+    parser.add_argument("--fanout-graph-top-k", type=int, default=12)
+    parser.add_argument("--fanout-gate-temperature", type=float, default=0.5)
+    parser.add_argument("--fanout-gate-floor", type=float, default=0.02)
+    parser.add_argument("--fanout-gate-cap", type=float, default=20.0)
+    parser.add_argument("--fanout-specificity-power", type=float, default=1.0)
+    parser.add_argument("--fanout-address-power", type=float, default=0.5)
+    parser.add_argument("--fanout-posture-weight", type=float, default=0.5)
+    parser.add_argument("--fanout-no-preserve-weight-mean", action="store_true")
+    parser.add_argument("--fanout-shuffle-graph", action="store_true")
     parser.add_argument("--tgvq-observer-rank", type=int, default=64)
     parser.add_argument("--tgvq-object-row-rank", type=int, default=16)
     parser.add_argument("--tgvq-ghost-row-rank", type=int, default=12)
@@ -4498,6 +4510,28 @@ def run_intrinsic_surprise_writes(
                 if selection.diagnostics is None:
                     selection.diagnostics = {}
                 selection.diagnostics.update(bptc_result.diagnostics)
+            if args.intrinsic_target_purifier == "fanout":
+                fanout_result = fanout_transform_weights(
+                    keys=selection.keys,
+                    targets=targets,
+                    weights=positive_weights,
+                    all_outputs=captures[layer_idx].outputs[: usable_keys.shape[0]],
+                    token_indices=selection.token_indices,
+                    max_rows=args.fanout_max_rows,
+                    graph_top_k=args.fanout_graph_top_k,
+                    gate_temperature=args.fanout_gate_temperature,
+                    gate_floor=args.fanout_gate_floor,
+                    gate_cap=args.fanout_gate_cap,
+                    specificity_power=args.fanout_specificity_power,
+                    address_power=args.fanout_address_power,
+                    posture_weight=args.fanout_posture_weight,
+                    preserve_weight_mean=not args.fanout_no_preserve_weight_mean,
+                    shuffle_graph=args.fanout_shuffle_graph,
+                )
+                positive_weights = fanout_result.weights
+                if selection.diagnostics is None:
+                    selection.diagnostics = {}
+                selection.diagnostics.update(fanout_result.diagnostics)
             uncapped_target_fro = float(torch.linalg.vector_norm(targets.float()).item())
             target_center_norm = 0.0
             if args.intrinsic_surprise_center_targets:
@@ -5654,6 +5688,16 @@ def run_intrinsic_surprise_writes(
                     "bptc_disable_precision": bool(getattr(args, "bptc_disable_precision", False)),
                     "bptc_disable_capture": bool(getattr(args, "bptc_disable_capture", False)),
                     "bptc_shuffle_graph": bool(getattr(args, "bptc_shuffle_graph", False)),
+                    "fanout_graph_top_k": getattr(args, "fanout_graph_top_k", 0),
+                    "fanout_max_rows": getattr(args, "fanout_max_rows", 0),
+                    "fanout_gate_temperature": getattr(args, "fanout_gate_temperature", 0.0),
+                    "fanout_gate_floor": getattr(args, "fanout_gate_floor", 0.0),
+                    "fanout_gate_cap": getattr(args, "fanout_gate_cap", 0.0),
+                    "fanout_specificity_power": getattr(args, "fanout_specificity_power", 0.0),
+                    "fanout_address_power": getattr(args, "fanout_address_power", 0.0),
+                    "fanout_posture_weight": getattr(args, "fanout_posture_weight", 0.0),
+                    "fanout_preserve_weight_mean": not bool(getattr(args, "fanout_no_preserve_weight_mean", False)),
+                    "fanout_shuffle_graph": bool(getattr(args, "fanout_shuffle_graph", False)),
                     "tgvq_observer_rank": getattr(args, "tgvq_observer_rank", 0),
                     "tgvq_object_row_rank": getattr(args, "tgvq_object_row_rank", 0),
                     "tgvq_ghost_row_rank": getattr(args, "tgvq_ghost_row_rank", 0),
