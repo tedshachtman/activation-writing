@@ -1,0 +1,14 @@
+Symbolic rule packet.
+A code has one shape symbol and one mark word.
+The shape chooses the material:
+- ◇ means copper.
+- ▲ means glass.
+- ◆ means stone.
+- ✚ means linen.
+The mark chooses the state:
+- zor means sealed.
+- vek means open.
+- lum means flagged.
+- pav means archived.
+To decode a code, combine material then state.
+Examples: ◇ zor means copper sealed. ▲ vek means glass open.

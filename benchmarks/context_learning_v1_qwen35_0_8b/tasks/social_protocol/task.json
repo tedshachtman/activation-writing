@@ -1,0 +1,8 @@
+{
+  "context_file": "context.txt",
+  "eval_file": "eval.jsonl",
+  "metadata": {},
+  "seed": 1,
+  "task_family": "fictional_social_rules",
+  "task_id": "social_protocol"
+}

@@ -10272,3 +10272,172 @@ Interpretation:
   effects, and removing them can expose a specific grammar/readout failure.
 - The useful next separator probably needs a layer-interaction or downstream
   balance criterion, not another scalar threshold/scale/cap sweep.
+
+## 2026-05-26: Non-Translation Profile-Memory Transfer Test
+
+Question: does pairwise GCoherence slow accumulation transfer beyond
+mini-language translation into a personal/profile-memory setting?
+
+I added a new runner:
+
+```text
+scripts/profile_intrinsic_continual.py
+```
+
+It uses the same write path, expanded sentinel suite, and all-layer/no-sidecar
+discipline as the mini-language runner, but the context consists of fictional
+person profile notes and structured fact cards. Evaluation asks multiple-choice
+questions about profile facts, preferences, constraints, and simple
+profile-conditioned implications.
+
+Important benchmark construction detail:
+
+- The first prose-only profile screen was too weak:
+  - Mara `10/20 -> 12/20`
+  - Theo `5/20 -> 11/20`
+- I added explicit structured fact cards to each profile lesson.
+- Then I used teacher filtering with `baseline wrong` and `full-context
+  teacher correct` so the write is tested only on profile items the model can
+  use in context.
+
+Usable filtered profile fixture:
+
+| Profile | Baseline | Full context | Selected items |
+| --- | ---: | ---: | ---: |
+| Theo Brant | `0/11` | `11/11` | `11` |
+| Nadia Kest | `0/14` | `14/14` | `14` |
+
+Screen run:
+
+```text
+runs/profile_screen_theo_nadia_filtered_eval20
+```
+
+First transfer write:
+
+```text
+pairwise GCoherence q75 .005
+all 28 layers
+20 write contexts = 6 profile lessons + 14 profile variants
+input/output protection 256/20 and 256/10
+expanded sentinels
+```
+
+Run:
+
+```text
+runs/profile_twotask_gcoh_q75_s005_eval_filtered
+```
+
+Result after writing Theo:
+
+| Stage | Edited | c2w | before-correct drop | max drop | severe drops |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| after Theo write | Theo `0/11` | `1` | `0.261` | `1.375` | `2` |
+
+The run stopped before Nadia because it violated c2w. The flipped sentinel was
+idx `1`, arithmetic, answer `12`, predicted `10`, margin `1.219 -> -0.156`.
+
+Item-level profile behavior:
+
+```text
+Theo workspace: predicted Mara workspace
+Theo meeting style: predicted Mara meeting style
+Theo constraint: predicted Mara constraint
+Theo language: predicted Rust instead of Julia
+Theo tool: predicted Mara tool
+Theo delivery: often predicted Mara/default delivery option
+```
+
+Interpretation:
+
+- This is a clear negative transfer result for the current method. The
+  full-context teacher was perfect on the filtered profile items, but the
+  closed-book write acquired `0/11` and still damaged a sentinel.
+- The failure is not just low acquisition. The edited model often chose the
+  first-profile/default/Mara-like option for Theo facts. That suggests the
+  current profile write is capturing generic profile-answer posture or option
+  priors rather than profile-specific identity bindings.
+- Therefore pairwise GCoherence is conceptually generic, but the current
+  implementation is empirically mini-language-shaped. In particular,
+  `final_aligned` token selection and context-value targets appear much better
+  matched to translation/use prompts than to distributed profile facts.
+
+Next profile-memory direction:
+
+- Do not tune scale first; the write is both unsafe and non-acquiring.
+- The separator needs profile/object identity binding, likely by selecting
+  fact-card key/value rows directly rather than final-aligned positions.
+- A next legal same-pass variant would use `token_mode=all` or a profile-entity
+  span heuristic over the same context pass, then test whether profile fields
+  can be written without pulling first-profile/default option priors.
+
+## 2026-05-30: Context-Learning Benchmark v1
+
+Goal: create a scientifically cleaner public benchmark for this project rather
+than continuing to optimize only on the mini-language fixture.
+
+New code:
+
+```text
+scripts/build_context_learning_benchmark.py
+scripts/evaluate_context_learning_benchmark.py
+```
+
+Primary screened fixture:
+
+```text
+benchmarks/context_learning_v1_qwen35_0_8b
+```
+
+Screening model:
+
+```text
+Qwen/Qwen3.5-0.8B-Base
+device=mps
+dtype=float16
+```
+
+Acceptance rule:
+
+```text
+include an item only if:
+  no-context baseline is wrong
+  full-context teacher is correct
+```
+
+The saved benchmark contains 10 task families with 8 accepted items each:
+
+| Task | Family | Seed | Candidate baseline | Candidate context | Accepted |
+| --- | --- | ---: | ---: | ---: | ---: |
+| mini_language | invented_language_translation | 1 | `9/24` | `15/24` | `10` |
+| user_profile | personal_profile_memory | 1 | `13/24` | `24/24` | `11` |
+| symbolic_rules | new_symbolic_rules | 1 | `8/24` | `21/24` | `13` |
+| taxonomy | new_category_system | 1 | `5/24` | `24/24` | `19` |
+| map_legend | map_symbol_rules | 1 | `5/24` | `24/24` | `19` |
+| api_protocol | fictional_api_semantics | 1 | `6/24` | `24/24` | `18` |
+| game_rules | new_game_mechanics | 1 | `4/24` | `22/24` | `18` |
+| causal_objects | fictional_causal_world | 1 | `7/24` | `22/24` | `15` |
+| scheduling_policy | custom_policy_learning | 1 | `9/24` | `17/24` | `8` |
+| social_protocol | fictional_social_rules | 1 | `9/24` | `24/24` | `15` |
+
+Re-evaluating the saved accepted items reproduced:
+
+```text
+no-context baseline: 0/80
+full-context teacher: 80/80
+expanded sentinel baseline: 20/25
+```
+
+Interpretation:
+
+- This is a better central benchmark than the old single mini-language fixture
+  because it tests several forms of context acquisition: language, profile
+  memory, symbolic rules, taxonomy, map legend, API semantics, game rules,
+  causal object rules, scheduling policy, and social protocol.
+- It is still a model-screened benchmark. That is intentional for write
+  research: the write can only be evaluated where the base model has a real
+  in-context teacher computation to consolidate.
+- For public comparisons, every result should report baseline score,
+  full-context teacher score, edited closed-book score, expanded sentinel
+  c2w, and margin drops on exactly this saved split.

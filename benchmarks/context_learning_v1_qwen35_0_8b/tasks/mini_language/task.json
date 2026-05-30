@@ -1,0 +1,10 @@
+{
+  "context_file": "context.txt",
+  "eval_file": "eval.jsonl",
+  "metadata": {
+    "language": "Neral-1"
+  },
+  "seed": 1,
+  "task_family": "invented_language_translation",
+  "task_id": "mini_language"
+}

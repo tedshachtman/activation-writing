@@ -1,0 +1,7 @@
+Fictional object physics packet.
+- If a neralith near wet copper, it hums softly.
+- If a vaskel under blue light, it turns transparent.
+- If a orbid beside salt, it grows warm.
+- If a lomek touched by ash, it becomes brittle.
+- If a praxen inside fog, it glows green.
+Infer the consequence from the condition.

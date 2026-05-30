@@ -1,0 +1,8 @@
+{
+  "context_file": "context.txt",
+  "eval_file": "eval.jsonl",
+  "metadata": {},
+  "seed": 1,
+  "task_family": "new_category_system",
+  "task_id": "taxonomy"
+}

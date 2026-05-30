@@ -1,0 +1,8 @@
+{
+  "context_file": "context.txt",
+  "eval_file": "eval.jsonl",
+  "metadata": {},
+  "seed": 1,
+  "task_family": "custom_policy_learning",
+  "task_id": "scheduling_policy"
+}

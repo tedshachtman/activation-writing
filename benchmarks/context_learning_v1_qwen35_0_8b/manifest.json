@@ -1,0 +1,121 @@
+{
+  "acceptance_rule": "context_correct and baseline_wrong for each accepted item",
+  "accepted_task_count": 10,
+  "benchmark_name": "context_learning_v1",
+  "candidate_count_per_seed": 24,
+  "chat_template": false,
+  "created_at": "2026-05-30T13:49:27-0400",
+  "device": "mps",
+  "dtype": "float16",
+  "eval_items_per_task": 8,
+  "git_revision": "2f7a38ff4d5538654f0f88cf2e85dcca0116e267",
+  "max_length": 4096,
+  "model": "Qwen/Qwen3.5-0.8B-Base",
+  "rejected_tasks": [],
+  "require_baseline_wrong": true,
+  "runtime_seconds": 277.483686208725,
+  "seeds": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "sentinel_file": "safety/sentinels_expanded.jsonl",
+  "tasks": [
+    {
+      "context_file": "tasks/mini_language/context.txt",
+      "eval_file": "tasks/mini_language/eval.jsonl",
+      "eval_items": 8,
+      "metadata": {
+        "language": "Neral-1"
+      },
+      "seed": 1,
+      "task_family": "invented_language_translation",
+      "task_id": "mini_language"
+    },
+    {
+      "context_file": "tasks/user_profile/context.txt",
+      "eval_file": "tasks/user_profile/eval.jsonl",
+      "eval_items": 8,
+      "metadata": {
+        "person": "Iris Vale"
+      },
+      "seed": 1,
+      "task_family": "personal_profile_memory",
+      "task_id": "user_profile"
+    },
+    {
+      "context_file": "tasks/symbolic_rules/context.txt",
+      "eval_file": "tasks/symbolic_rules/eval.jsonl",
+      "eval_items": 8,
+      "metadata": {},
+      "seed": 1,
+      "task_family": "new_symbolic_rules",
+      "task_id": "symbolic_rules"
+    },
+    {
+      "context_file": "tasks/taxonomy/context.txt",
+      "eval_file": "tasks/taxonomy/eval.jsonl",
+      "eval_items": 8,
+      "metadata": {},
+      "seed": 1,
+      "task_family": "new_category_system",
+      "task_id": "taxonomy"
+    },
+    {
+      "context_file": "tasks/map_legend/context.txt",
+      "eval_file": "tasks/map_legend/eval.jsonl",
+      "eval_items": 8,
+      "metadata": {},
+      "seed": 1,
+      "task_family": "map_symbol_rules",
+      "task_id": "map_legend"
+    },
+    {
+      "context_file": "tasks/api_protocol/context.txt",
+      "eval_file": "tasks/api_protocol/eval.jsonl",
+      "eval_items": 8,
+      "metadata": {},
+      "seed": 1,
+      "task_family": "fictional_api_semantics",
+      "task_id": "api_protocol"
+    },
+    {
+      "context_file": "tasks/game_rules/context.txt",
+      "eval_file": "tasks/game_rules/eval.jsonl",
+      "eval_items": 8,
+      "metadata": {},
+      "seed": 1,
+      "task_family": "new_game_mechanics",
+      "task_id": "game_rules"
+    },
+    {
+      "context_file": "tasks/causal_objects/context.txt",
+      "eval_file": "tasks/causal_objects/eval.jsonl",
+      "eval_items": 8,
+      "metadata": {},
+      "seed": 1,
+      "task_family": "fictional_causal_world",
+      "task_id": "causal_objects"
+    },
+    {
+      "context_file": "tasks/scheduling_policy/context.txt",
+      "eval_file": "tasks/scheduling_policy/eval.jsonl",
+      "eval_items": 8,
+      "metadata": {},
+      "seed": 1,
+      "task_family": "custom_policy_learning",
+      "task_id": "scheduling_policy"
+    },
+    {
+      "context_file": "tasks/social_protocol/context.txt",
+      "eval_file": "tasks/social_protocol/eval.jsonl",
+      "eval_items": 8,
+      "metadata": {},
+      "seed": 1,
+      "task_family": "fictional_social_rules",
+      "task_id": "social_protocol"
+    }
+  ]
+}

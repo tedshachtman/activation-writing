@@ -1,0 +1,7 @@
+Fictional city etiquette packet.
+- When meeting a Archivist, you should greet with a written question.
+- When meeting a Harbor Clerk, you should offer the blue token.
+- When meeting a Glass Warden, you should speak only after the bell.
+- When meeting a Market Scribe, you should begin with the invoice number.
+- When meeting a Lantern Guide, you should ask for the north route.
+Use these customs exactly.

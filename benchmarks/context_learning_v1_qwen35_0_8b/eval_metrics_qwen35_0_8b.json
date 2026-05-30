@@ -1,0 +1,730 @@
+{
+  "baseline_accuracy": 0.0,
+  "baseline_correct": 0,
+  "benchmark_dir": "benchmarks/context_learning_v1_qwen35_0_8b",
+  "context_accuracy": 1.0,
+  "context_correct": 80,
+  "device": "mps",
+  "dtype": "float16",
+  "item_count": 80,
+  "model": "Qwen/Qwen3.5-0.8B-Base",
+  "runtime_seconds": 89.43877673149109,
+  "sentinel": {
+    "accuracy": 0.8,
+    "correct": 20,
+    "details": [
+      {
+        "answer": "Blue",
+        "answer_letter": "A",
+        "category": "common_knowledge",
+        "correct": true,
+        "margin": 5.53125,
+        "options": [
+          "Blue",
+          "Seven",
+          "Quickly",
+          "Table"
+        ],
+        "prediction": "A",
+        "prediction_text": "Blue",
+        "prompt": "Choose the correct answer. Write only the answer text.\n\nWhat color is a clear daytime sky usually described as?\nA. Blue\nB. Seven\nC. Quickly\nD. Table\n\nAnswer:",
+        "scores": [
+          -7.333094596862793,
+          -14.208094596862793,
+          -14.208094596862793,
+          -12.864344596862793
+        ]
+      },
+      {
+        "answer": "12",
+        "answer_letter": "C",
+        "category": "arithmetic",
+        "correct": false,
+        "margin": -0.4999999801317849,
+        "options": [
+          "10",
+          "11",
+          "12",
+          "13"
+        ],
+        "prediction": "A",
+        "prediction_text": "10",
+        "prompt": "Choose the correct answer. Write only the answer text.\n\nWhat is 7 plus 5?\nA. 10\nB. 11\nC. 12\nD. 13\n\nAnswer:",
+        "scores": [
+          -3.3174677093823752,
+          -3.7341343561808267,
+          -3.81746768951416,
+          -3.56746768951416
+        ]
+      },
+      {
+        "answer": "Run",
+        "answer_letter": "B",
+        "category": "grammar",
+        "correct": true,
+        "margin": 5.4375,
+        "options": [
+          "Marble",
+          "Run",
+          "Green",
+          "North"
+        ],
+        "prediction": "B",
+        "prediction_text": "Run",
+        "prompt": "Choose the correct answer. Write only the answer text.\n\nWhich word is a verb?\nA. Marble\nB. Run\nC. Green\nD. North\n\nAnswer:",
+        "scores": [
+          -14.377418518066406,
+          -5.971168518066406,
+          -14.127418518066406,
+          -11.408668518066406
+        ]
+      },
+      {
+        "answer": "Dog",
+        "answer_letter": "A",
+        "category": "common_knowledge",
+        "correct": true,
+        "margin": 7.624999523162842,
+        "options": [
+          "Dog",
+          "Spoon",
+          "Cloud",
+          "Triangle"
+        ],
+        "prediction": "A",
+        "prediction_text": "Dog",
+        "prompt": "Choose the correct answer. Write only the answer text.\n\nWhich animal is known for barking?\nA. Dog\nB. Spoon\nC. Cloud\nD. Triangle\n\nAnswer:",
+        "scores": [
+          -6.465067386627197,
+          -14.152566909790039,
+          -16.51194190979004,
+          -14.090066909790039
+        ]
+      },
+      {
+        "answer": "Paris",
+        "answer_letter": "C",
+        "category": "common_knowledge",
+        "correct": true,
+        "margin": 7.187500238418579,
+        "options": [
+          "Madrid",
+          "Berlin",
+          "Paris",
+          "Rome"
+        ],
+        "prediction": "C",
+        "prediction_text": "Paris",
+        "prompt": "Choose the correct answer. Write only the answer text.\n\nWhich city is the capital of France?\nA. Madrid\nB. Berlin\nC. Paris\nD. Rome\n\nAnswer:",
+        "scores": [
+          -9.38887882232666,
+          -10.38887882232666,
+          -2.201378583908081,
+          -10.45137882232666
+        ]
+      },
+      {
+        "answer": "Cold",
+        "answer_letter": "A",
+        "category": "semantics",
+        "correct": true,
+        "margin": 8.218750476837158,
+        "options": [
+          "Cold",
+          "Tall",
+          "Loud",
+          "Smooth"
+        ],
+        "prediction": "A",
+        "prediction_text": "Cold",
+        "prompt": "Choose the correct answer. Write only the answer text.\n\nWhich word means the opposite of hot?\nA. Cold\nB. Tall\nC. Loud\nD. Smooth\n\nAnswer:",
+        "scores": [
+          -5.567678928375244,
+          -17.395803451538086,
+          -18.341115951538086,
+          -13.786429405212402
+        ]
+      },
+      {
+        "answer": "Pencil",
+        "answer_letter": "A",
+        "category": "common_knowledge",
+        "correct": true,
+        "margin": 9.11074750404805,
+        "options": [
+          "Pencil",
+          "Ocean",
+          "Yesterday",
+          "Running"
+        ],
+        "prediction": "A",
+        "prediction_text": "Pencil",
+        "prompt": "Choose the correct answer. Write only the answer text.\n\nWhich item is used for writing?\nA. Pencil\nB. Ocean\nC. Yesterday\nD. Running\n\nAnswer:",
+        "scores": [
+          -2.896328759379685,
+          -12.007076263427734,
+          -15.100826263427734,
+          -12.007076263427734
+        ]
+      },
+      {
+        "answer": "Children",
+        "answer_letter": "B",
+        "category": "grammar",
+        "correct": false,
+        "margin": -2.763467162847519,
+        "options": [
+          "Childs",
+          "Children",
+          "Childes",
+          "Childing"
+        ],
+        "prediction": "A",
+        "prediction_text": "Childs",
+        "prompt": "Choose the correct answer. Write only the answer text.\n\nWhat is the plural of child?\nA. Childs\nB. Children\nC. Childes\nD. Childing\n\nAnswer:",
+        "scores": [
+          -4.836508899927139,
+          -7.599976062774658,
+          -5.274008870124817,
+          -6.180258870124817
+        ]
+      },
+      {
+        "answer": "14",
+        "answer_letter": "A",
+        "category": "arithmetic",
+        "correct": true,
+        "margin": 2.3343014046549797,
+        "options": [
+          "14",
+          "9",
+          "3",
+          "0"
+        ],
+        "prediction": "A",
+        "prediction_text": "14",
+        "prompt": "Choose the correct answer. Write only the answer text.\n\nWhich number is larger?\nA. 14\nB. 9\nC. 3\nD. 0\n\nAnswer:",
+        "scores": [
+          -1.8291977122426033,
+          -4.163499116897583,
+          -4.288499116897583,
+          -4.788499116897583
+        ]
+      },
+      {
+        "answer": "The cat sees the dog.",
+        "answer_letter": "B",
+        "category": "lyran_contamination",
+        "correct": true,
+        "margin": 0.028883007434584496,
+        "options": [
+          "na lum niv drem",
+          "The cat sees the dog.",
+          "pa vek soka palo",
+          "fu narp vesh tul"
+        ],
+        "prediction": "B",
+        "prediction_text": "The cat sees the dog.",
+        "prompt": "Choose the correct answer. Write only the answer text.\n\nWhich sentence is ordinary English?\nA. na lum niv drem\nB. The cat sees the dog.\nC. pa vek soka palo\nD. fu narp vesh tul\n\nAnswer:",
+        "scores": [
+          -2.0784348835411945,
+          -2.04955187610661,
+          -2.804427126562223,
+          -2.396473572240211
+        ]
+      },
+      {
+        "answer": "5",
+        "answer_letter": "C",
+        "category": "arithmetic",
+        "correct": false,
+        "margin": -1.7500001192092896,
+        "options": [
+          "3",
+          "4",
+          "5",
+          "6"
+        ],
+        "prediction": "A",
+        "prediction_text": "3",
+        "prompt": "Choose the correct answer. Write only the answer text.\n\nWhat is 9 minus 4?\nA. 3\nB. 4\nC. 5\nD. 6\n\nAnswer:",
+        "scores": [
+          -3.657608389854431,
+          -5.032608509063721,
+          -5.407608509063721,
+          -5.438858509063721
+        ]
+      },
+      {
+        "answer": "Table",
+        "answer_letter": "A",
+        "category": "grammar",
+        "correct": true,
+        "margin": 3.875,
+        "options": [
+          "Table",
+          "Quickly",
+          "Blue",
+          "Under"
+        ],
+        "prediction": "A",
+        "prediction_text": "Table",
+        "prompt": "Choose the correct answer. Write only the answer text.\n\nWhich word is a noun?\nA. Table\nB. Quickly\nC. Blue\nD. Under\n\nAnswer:",
+        "scores": [
+          -4.040024280548096,
+          -9.915024757385254,
+          -10.352524757385254,
+          -7.915024280548096
+        ]
+      },
+      {
+        "answer": "April",
+        "answer_letter": "B",
+        "category": "common_knowledge",
+        "correct": true,
+        "margin": 0.5,
+        "options": [
+          "January",
+          "April",
+          "August",
+          "November"
+        ],
+        "prediction": "B",
+        "prediction_text": "April",
+        "prompt": "Choose the correct answer. Write only the answer text.\n\nWhich month comes after March?\nA. January\nB. April\nC. August\nD. November\n\nAnswer:",
+        "scores": [
+          -5.693041801452637,
+          -5.130541801452637,
+          -5.818041801452637,
+          -5.630541801452637
+        ]
+      },
+      {
+        "answer": "Full",
+        "answer_letter": "A",
+        "category": "semantics",
+        "correct": true,
+        "margin": 7.6875,
+        "options": [
+          "Full",
+          "Late",
+          "Thin",
+          "Quiet"
+        ],
+        "prediction": "A",
+        "prediction_text": "Full",
+        "prompt": "Choose the correct answer. Write only the answer text.\n\nWhich word means the opposite of empty?\nA. Full\nB. Late\nC. Thin\nD. Quiet\n\nAnswer:",
+        "scores": [
+          -6.310437202453613,
+          -13.997937202453613,
+          -15.154187202453613,
+          -16.497936248779297
+        ]
+      },
+      {
+        "answer": "12",
+        "answer_letter": "C",
+        "category": "arithmetic",
+        "correct": true,
+        "margin": 0.7499999850988388,
+        "options": [
+          "7",
+          "9",
+          "12",
+          "14"
+        ],
+        "prediction": "C",
+        "prediction_text": "12",
+        "prompt": "Choose the correct answer. Write only the answer text.\n\nWhat is 3 times 4?\nA. 7\nB. 9\nC. 12\nD. 14\n\nAnswer:",
+        "scores": [
+          -5.677215337753296,
+          -6.114715337753296,
+          -3.0504322995742164,
+          -3.800432284673055
+        ]
+      },
+      {
+        "answer": "The teacher opens the book.",
+        "answer_letter": "A",
+        "category": "lyran_contamination",
+        "correct": true,
+        "margin": 0.37766136067997036,
+        "options": [
+          "The teacher opens the book.",
+          "mi vek soka ro",
+          "pa narp vesh tul",
+          "fu lum niv drem"
+        ],
+        "prediction": "A",
+        "prediction_text": "The teacher opens the book.",
+        "prompt": "Choose the correct answer. Write only the answer text.\n\nWhich sentence is ordinary English?\nA. The teacher opens the book.\nB. mi vek soka ro\nC. pa narp vesh tul\nD. fu lum niv drem\n\nAnswer:",
+        "scores": [
+          -1.3671201991188962,
+          -1.7447815597988665,
+          -2.117632458039831,
+          -2.512228007754311
+        ]
+      },
+      {
+        "answer": "Cup",
+        "answer_letter": "A",
+        "category": "common_knowledge",
+        "correct": true,
+        "margin": 5.125000476837158,
+        "options": [
+          "Cup",
+          "Mountain",
+          "Tuesday",
+          "Running"
+        ],
+        "prediction": "A",
+        "prediction_text": "Cup",
+        "prompt": "Choose the correct answer. Write only the answer text.\n\nWhich item is used for drinking water?\nA. Cup\nB. Mountain\nC. Tuesday\nD. Running\n\nAnswer:",
+        "scores": [
+          -5.658132076263428,
+          -13.595632553100586,
+          -13.251882553100586,
+          -10.783132553100586
+        ]
+      },
+      {
+        "answer": "Mice",
+        "answer_letter": "B",
+        "category": "grammar",
+        "correct": true,
+        "margin": 1.1874999776482582,
+        "options": [
+          "Mouses",
+          "Mice",
+          "Mousing",
+          "Mices"
+        ],
+        "prediction": "B",
+        "prediction_text": "Mice",
+        "prompt": "Choose the correct answer. Write only the answer text.\n\nWhat is the plural of mouse?\nA. Mouses\nB. Mice\nC. Mousing\nD. Mices\n\nAnswer:",
+        "scores": [
+          -5.769150257110596,
+          -4.0816502794623375,
+          -7.144150257110596,
+          -5.269150257110596
+        ]
+      },
+      {
+        "answer": "Late",
+        "answer_letter": "A",
+        "category": "semantics",
+        "correct": true,
+        "margin": 7.71875,
+        "options": [
+          "Late",
+          "Soft",
+          "Wide",
+          "Bright"
+        ],
+        "prediction": "A",
+        "prediction_text": "Late",
+        "prompt": "Choose the correct answer. Write only the answer text.\n\nWhich word means the opposite of early?\nA. Late\nB. Soft\nC. Wide\nD. Bright\n\nAnswer:",
+        "scores": [
+          -6.131315231323242,
+          -13.850065231323242,
+          -14.787565231323242,
+          -17.771940231323242
+        ]
+      },
+      {
+        "answer": "2",
+        "answer_letter": "B",
+        "category": "arithmetic",
+        "correct": false,
+        "margin": -0.4668200413386028,
+        "options": [
+          "18",
+          "2",
+          "7",
+          "11"
+        ],
+        "prediction": "A",
+        "prediction_text": "18",
+        "prompt": "Choose the correct answer. Write only the answer text.\n\nWhich number is smallest?\nA. 18\nB. 2\nC. 7\nD. 11\n\nAnswer:",
+        "scores": [
+          -1.9514609773953755,
+          -2.4182810187339783,
+          -3.2932809591293335,
+          -2.3264609575271606
+        ]
+      },
+      {
+        "answer": "Tokyo",
+        "answer_letter": "A",
+        "category": "common_knowledge",
+        "correct": true,
+        "margin": 5.374999523162842,
+        "options": [
+          "Tokyo",
+          "Cairo",
+          "Lima",
+          "Oslo"
+        ],
+        "prediction": "A",
+        "prediction_text": "Tokyo",
+        "prompt": "Choose the correct answer. Write only the answer text.\n\nWhich city is in Japan?\nA. Tokyo\nB. Cairo\nC. Lima\nD. Oslo\n\nAnswer:",
+        "scores": [
+          -2.9109292030334473,
+          -8.285928726196289,
+          -15.176553726196289,
+          -11.723428726196289
+        ]
+      },
+      {
+        "answer": "Green",
+        "answer_letter": "C",
+        "category": "grammar",
+        "correct": true,
+        "margin": 1.0625,
+        "options": [
+          "Running",
+          "Chair",
+          "Green",
+          "Below"
+        ],
+        "prediction": "C",
+        "prediction_text": "Green",
+        "prompt": "Choose the correct answer. Write only the answer text.\n\nWhich word is an adjective?\nA. Running\nB. Chair\nC. Green\nD. Below\n\nAnswer:",
+        "scores": [
+          -5.795731067657471,
+          -8.170731544494629,
+          -4.733231067657471,
+          -7.483231067657471
+        ]
+      },
+      {
+        "answer": "The child reads the note.",
+        "answer_letter": "B",
+        "category": "lyran_contamination",
+        "correct": true,
+        "margin": 0.6738246608137464,
+        "options": [
+          "na vek drem mi",
+          "The child reads the note.",
+          "ro soka tul pa",
+          "mi narp palo fu"
+        ],
+        "prediction": "B",
+        "prediction_text": "The child reads the note.",
+        "prompt": "Choose the correct answer. Write only the answer text.\n\nWhich sentence is ordinary English?\nA. na vek drem mi\nB. The child reads the note.\nC. ro soka tul pa\nD. mi narp palo fu\n\nAnswer:",
+        "scores": [
+          -2.348547354587936,
+          -1.312795713582697,
+          -2.3589359897654503,
+          -1.9866203743964435
+        ]
+      },
+      {
+        "answer": "4",
+        "answer_letter": "C",
+        "category": "arithmetic",
+        "correct": false,
+        "margin": -1.5625000298023224,
+        "options": [
+          "2",
+          "3",
+          "4",
+          "5"
+        ],
+        "prediction": "A",
+        "prediction_text": "2",
+        "prompt": "Choose the correct answer. Write only the answer text.\n\nWhat is 20 divided by 5?\nA. 2\nB. 3\nC. 4\nD. 5\n\nAnswer:",
+        "scores": [
+          -3.0803135335445404,
+          -4.955313444137573,
+          -4.642813563346863,
+          -4.955313444137573
+        ]
+      },
+      {
+        "answer": "Quiet",
+        "answer_letter": "A",
+        "category": "semantics",
+        "correct": true,
+        "margin": 7.9375,
+        "options": [
+          "Quiet",
+          "Heavy",
+          "Short",
+          "Sour"
+        ],
+        "prediction": "A",
+        "prediction_text": "Quiet",
+        "prompt": "Choose the correct answer. Write only the answer text.\n\nWhich word means the opposite of noisy?\nA. Quiet\nB. Heavy\nC. Short\nD. Sour\n\nAnswer:",
+        "scores": [
+          -6.100656509399414,
+          -14.913156509399414,
+          -14.038156509399414,
+          -15.131906509399414
+        ]
+      }
+    ],
+    "mean_margin": 3.2280552322186997,
+    "n": 25,
+    "predictions": [
+      "A",
+      "A",
+      "B",
+      "A",
+      "C",
+      "A",
+      "A",
+      "A",
+      "A",
+      "B",
+      "A",
+      "A",
+      "B",
+      "A",
+      "C",
+      "A",
+      "A",
+      "B",
+      "A",
+      "A",
+      "A",
+      "C",
+      "B",
+      "A",
+      "A"
+    ]
+  },
+  "task_count": 10,
+  "tasks": [
+    {
+      "baseline_accuracy": 0.0,
+      "baseline_correct": 0,
+      "baseline_mean_margin": -3.197566571092466,
+      "baseline_n": 8,
+      "context_accuracy": 1.0,
+      "context_correct": 8,
+      "context_mean_margin": 2.454850963921672,
+      "context_n": 8,
+      "seed": 1,
+      "task_family": "invented_language_translation",
+      "task_id": "mini_language"
+    },
+    {
+      "baseline_accuracy": 0.0,
+      "baseline_correct": 0,
+      "baseline_mean_margin": -0.727714022116955,
+      "baseline_n": 8,
+      "context_accuracy": 1.0,
+      "context_correct": 8,
+      "context_mean_margin": 1.8233372310322582,
+      "context_n": 8,
+      "seed": 1,
+      "task_family": "personal_profile_memory",
+      "task_id": "user_profile"
+    },
+    {
+      "baseline_accuracy": 0.0,
+      "baseline_correct": 0,
+      "baseline_mean_margin": -3.5159810920013115,
+      "baseline_n": 8,
+      "context_accuracy": 1.0,
+      "context_correct": 8,
+      "context_mean_margin": 3.6136939934222028,
+      "context_n": 8,
+      "seed": 1,
+      "task_family": "new_symbolic_rules",
+      "task_id": "symbolic_rules"
+    },
+    {
+      "baseline_accuracy": 0.0,
+      "baseline_correct": 0,
+      "baseline_mean_margin": -1.6602391171618365,
+      "baseline_n": 8,
+      "context_accuracy": 1.0,
+      "context_correct": 8,
+      "context_mean_margin": 1.3225663323622332,
+      "context_n": 8,
+      "seed": 1,
+      "task_family": "new_category_system",
+      "task_id": "taxonomy"
+    },
+    {
+      "baseline_accuracy": 0.0,
+      "baseline_correct": 0,
+      "baseline_mean_margin": -2.542790033330675,
+      "baseline_n": 8,
+      "context_accuracy": 1.0,
+      "context_correct": 8,
+      "context_mean_margin": 2.2399008348068796,
+      "context_n": 8,
+      "seed": 1,
+      "task_family": "map_symbol_rules",
+      "task_id": "map_legend"
+    },
+    {
+      "baseline_accuracy": 0.0,
+      "baseline_correct": 0,
+      "baseline_mean_margin": -1.1576409356542476,
+      "baseline_n": 8,
+      "context_accuracy": 1.0,
+      "context_correct": 8,
+      "context_mean_margin": 0.8481528528651929,
+      "context_n": 8,
+      "seed": 1,
+      "task_family": "fictional_api_semantics",
+      "task_id": "api_protocol"
+    },
+    {
+      "baseline_accuracy": 0.0,
+      "baseline_correct": 0,
+      "baseline_mean_margin": -0.5813574884914487,
+      "baseline_n": 8,
+      "context_accuracy": 1.0,
+      "context_correct": 8,
+      "context_mean_margin": 0.9346415520765732,
+      "context_n": 8,
+      "seed": 1,
+      "task_family": "new_game_mechanics",
+      "task_id": "game_rules"
+    },
+    {
+      "baseline_accuracy": 0.0,
+      "baseline_correct": 0,
+      "baseline_mean_margin": -1.2309296942548826,
+      "baseline_n": 8,
+      "context_accuracy": 1.0,
+      "context_correct": 8,
+      "context_mean_margin": 2.13192835686156,
+      "context_n": 8,
+      "seed": 1,
+      "task_family": "fictional_causal_world",
+      "task_id": "causal_objects"
+    },
+    {
+      "baseline_accuracy": 0.0,
+      "baseline_correct": 0,
+      "baseline_mean_margin": -0.8202681912468204,
+      "baseline_n": 8,
+      "context_accuracy": 1.0,
+      "context_correct": 8,
+      "context_mean_margin": 0.6331066053074512,
+      "context_n": 8,
+      "seed": 1,
+      "task_family": "custom_policy_learning",
+      "task_id": "scheduling_policy"
+    },
+    {
+      "baseline_accuracy": 0.0,
+      "baseline_correct": 0,
+      "baseline_mean_margin": -0.99051139713265,
+      "baseline_n": 8,
+      "context_accuracy": 1.0,
+      "context_correct": 8,
+      "context_mean_margin": 0.8353742688384955,
+      "context_n": 8,
+      "seed": 1,
+      "task_family": "fictional_social_rules",
+      "task_id": "social_protocol"
+    }
+  ]
+}

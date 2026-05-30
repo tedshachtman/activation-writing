@@ -1,0 +1,7 @@
+Team scheduling policy packet.
+- red review sessions go to Tuesday morning.
+- blue planning sessions go to Thursday afternoon.
+- green retro sessions go to Friday midday.
+- silver audit sessions go to Monday late afternoon.
+- amber design sessions go to Wednesday early afternoon.
+Choose the correct slot for each session type.

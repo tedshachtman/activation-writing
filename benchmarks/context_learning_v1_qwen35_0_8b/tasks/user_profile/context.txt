@@ -1,0 +1,15 @@
+Fictional user profile packet.
+NAME: Iris Vale
+HANDLE: copper-lake
+CITY: Marrow Quay
+PROJECT: the lantern-index archive
+LANGUAGE: Elixir
+WORKSPACE: a north room above a bookbinder
+DRINK: cardamom coffee
+MEETING: annotated checklists
+WRITING: short technical memos with risks listed
+CONSTRAINT: avoid same-day surprise calls
+DELIVERY: the bookbinder front desk
+HOBBY: repairing mechanical music boxes
+
+Use these profile facts when answering questions about Iris Vale. Do not substitute generic assistant preferences.

@@ -1,0 +1,13 @@
+Neral-1 is an invented language.
+Sentence order is: TENSE VERB SUBJECT OBJECT.
+Adjectives follow nouns in Neral but precede nouns in English.
+
+Tense words: na=present, pa=past.
+Nouns: mip=lantern, tav=harbor, lud=scribe, bem=orchard, rok=copper, zel=mirror.
+Verbs: nosh=carries/carried, kiv=guards/guarded, daru=mends/mended, vex=weighs/weighed.
+Adjectives: su=silver, gar=broken, no=quiet, fim=narrow.
+
+Examples:
+- na nosh lud mip -> the teacher sees the cat
+- pa kiv tav bem -> the dog liked the bird
+- na daru rok su zel gar -> the small child helps the big artist

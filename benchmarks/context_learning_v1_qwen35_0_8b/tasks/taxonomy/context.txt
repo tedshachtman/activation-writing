@@ -1,0 +1,7 @@
+Fictional taxonomy packet.
+Classify each artifact by its surface, temperature, and material:
+- Virel: striped, cold, metal.
+- Nembic: smooth, warm, glass.
+- Tovren: spotted, dry, wood.
+- Calith: ringed, wet, stone.
+If all three properties match a class, choose that class.

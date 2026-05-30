@@ -1,0 +1,10 @@
+{
+  "context_file": "context.txt",
+  "eval_file": "eval.jsonl",
+  "metadata": {
+    "person": "Iris Vale"
+  },
+  "seed": 1,
+  "task_family": "personal_profile_memory",
+  "task_id": "user_profile"
+}

@@ -1,0 +1,6 @@
+Fictional board game packet for Kestral Board.
+- Lumen: moves diagonally exactly two spaces.
+- Brack: moves straight exactly three spaces.
+- Siv: captures only on adjacent spaces.
+- Orn: jumps over one occupied space.
+Use these movement rules exactly.

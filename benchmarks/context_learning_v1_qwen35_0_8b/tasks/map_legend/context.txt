@@ -1,0 +1,7 @@
+Expedition map legend packet.
+- blue triangle means fresh water.
+- gold spiral means safe campsite.
+- black square means unstable bridge.
+- green fork means edible plants.
+- white ring means radio beacon.
+When asked about a symbol, use the legend exactly.
